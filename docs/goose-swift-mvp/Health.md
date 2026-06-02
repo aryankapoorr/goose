@@ -12,7 +12,7 @@ Swift evidence 2026-06-01: `HealthView.swift`, `AppRouter.swift`, `xcodebuildmcp
 - [x] Keep this tab behind the Swift `Health` tab item.
 - [x] Define child routes: Health Monitor, Sleep, Recovery, Strain, Stress, Cardio Load, Energy Bank, Packet Inputs, Algorithms, Reference Comparisons, Calibration.
 - [x] Define a typed `HealthMetricSnapshot` model shared by cards, trend rows, and detail sheets.
-- [x] Keep static fixture values isolated behind explicit sample-data flags.
+- [x] Remove static runtime fixture values; show unavailable states until live/local/bridge data exists.
 - [x] Support deep links or programmatic routes for every child surface.
 - [x] Add previews for each major child with populated and missing data.
 
@@ -85,10 +85,11 @@ Swift evidence 2026-06-01: `HealthView.swift`, `AppRouter.swift`, `xcodebuildmcp
 - [x] Add Sleep insights: score impacts, locked/low-confidence states.
 - [x] Add Sleep Needed / Sleep Coach: wind down, target bedtime, need fulfillment.
 - [x] Add Alarm/window settings states.
+- [x] Add confirmed-user WHOOP alarm controls for V5 alarm set, run-now, and disable writes.
 - [x] Add trend rows: Sleep Score, Time Asleep, REM sleep, Deep Sleep, Heart Rate Dip, Sleep Bank, Sleep Time, Wake Time, Time To Fall Asleep.
 - [x] Add trend sheets with range selector, chart, analysis, and resources.
-- [x] Map data from sleep score output, Health sleep history, and imported sleep stage records.
-- [x] Add HealthKit sleep import action through `sleep.import_external_history` and refresh `goose.sleep.v1` views from imported sessions.
+- [x] Map data from sleep score output and trusted band sleep records.
+- [x] Quarantine platform sleep imports as reference-only evidence; `goose.sleep.v1` views must not refresh from platform sleep sessions.
 
 ## Recovery
 
@@ -126,7 +127,7 @@ Swift evidence 2026-06-01: `HealthView.swift`, `AppRouter.swift`, `xcodebuildmcp
 - [x] Add status states: Calibrating, Detraining, Maintaining, Peaking, Productive, Fatigued, Overtraining.
 - [x] Add weekly chart/timeline.
 - [x] Add resources: The Basics: Cardio Load, Cardio Status.
-- [x] Define required inputs before showing non-sample values.
+- [x] Define required inputs before showing real values.
 
 ## Energy Bank
 
@@ -166,14 +167,14 @@ Swift evidence 2026-06-01: `HealthView.swift`, `AppRouter.swift`, `xcodebuildmcp
 - [x] Agent Health-D: Implement Sleep overview/trends.
 - [x] Agent Health-E: Implement Recovery overview/trends.
 - [x] Agent Health-F: Implement Strain and Stress overview/trends.
-- [x] Agent Health-G: Implement Cardio Load and Energy Bank placeholders/data contracts.
+- [x] Agent Health-G: Implement Cardio Load and Energy Bank data contracts and unavailable states.
 - [x] Agent Health-H: Implement Algorithms, References, and Calibration.
 - [x] Agent Health-I: Add previews and screenshot verification for every child route.
 
 ## Acceptance Checks
 
 - [x] Health builds independently of Home/Coach/More changes.
-- [x] Every metric row has a clear data source, sample flag, or unavailable reason.
+- [x] Every metric row has a clear data source or unavailable reason.
 - [x] Every trend sheet can render no-data and populated states.
 - [x] Home score cards can deep link into the matching Health child page.
 - [x] Simulator screenshots cover Health landing plus Sleep, Recovery, Strain, Stress, and Health Monitor.

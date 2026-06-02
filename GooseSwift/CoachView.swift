@@ -3,54 +3,49 @@ import SwiftUI
 struct CoachView: View {
   @EnvironmentObject private var model: GooseAppModel
   @EnvironmentObject private var router: AppRouter
-  @AppStorage("goose.codex.appServerEndpoint") private var endpointText = "ws://127.0.0.1:17655"
-  @StateObject private var appServer = CodexAppServerModel()
-  @State private var authPresentation: CodexAuthWebPresentation?
+  @ObservedObject var healthStore: HealthDataStore
+  @StateObject private var chat = OpenAICoachChatModel()
+  @State private var promptDraft = ""
+  @State private var appliedCoachPromptRequestID = 0
+  @State private var showingChat = false
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 16) {
-        CoachHeaderCard()
-
-        CodexServerStatusCard(
-          state: appServer.runState,
-          bundleStatus: appServer.bundleStatus,
-          refresh: appServer.refresh,
-          start: appServer.start
-        )
-
-        CodexAuthCard(
-          endpointText: $endpointText,
-          connectionState: appServer.connectionState,
-          loginStatus: appServer.loginStatus,
-          loginID: appServer.loginID,
-          authPresentation: appServer.authWebPresentation,
-          deviceCode: appServer.deviceCode,
-          connect: { appServer.connect(endpointText: endpointText) },
-          disconnect: appServer.disconnect,
-          startLogin: { appServer.startChatGPTLogin(endpointText: endpointText) },
-          openAuth: { authPresentation = appServer.authWebPresentation }
-        )
-
-        CodexMessageLogCard(messages: appServer.messages)
-        CoachToolPreviewCard()
-        CoachLoginBoundaryCard()
-      }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 18)
-    }
-    .background(Color(.systemGroupedBackground))
+    CoachOverviewScreen(
+      snapshot: coachSnapshot,
+      chatIsSignedIn: chat.isSignedIn,
+      chatStatus: chatStatus,
+      openChat: { openChat(prompt: nil) },
+      openHealth: router.openHealth,
+      openMore: router.openMore,
+      openChatPrompt: openChat(prompt:)
+    )
+    .gooseScreenBackground()
     .navigationTitle("Coach")
-    .sheet(item: $authPresentation, onDismiss: appServer.dismissAuthWebView) { presentation in
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .toolbar {
+      if chat.isSignedIn {
+        ToolbarItem(placement: .topBarTrailing) {
+          CoachProfileMenu(chat: chat)
+        }
+      }
+    }
+    .sheet(isPresented: $showingChat) {
       NavigationStack {
-        CodexAuthWebView(url: presentation.url, onEvent: appServer.handleAuthWebEvent)
-          .navigationTitle("OpenAI Login")
+        chatSheetContent
+          .gooseScreenBackground()
+          .navigationTitle(chat.isSignedIn ? "Coach Chat" : "Coach Sign In")
           .navigationBarTitleDisplayMode(.inline)
+          .toolbarBackground(.hidden, for: .navigationBar)
           .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
+            ToolbarItem(placement: .topBarLeading) {
               Button("Done") {
-                authPresentation = nil
-                appServer.dismissAuthWebView()
+                showingChat = false
+              }
+            }
+            if chat.isSignedIn {
+              ToolbarItem(placement: .topBarTrailing) {
+                CoachProfileMenu(chat: chat)
               }
             }
           }
@@ -58,385 +53,622 @@ struct CoachView: View {
     }
     .onAppear {
       model.recordUIAction("page.opened", detail: "Coach")
-      appServer.refresh()
+      healthStore.loadBridgeCatalogsIfNeeded()
+      healthStore.refreshPacketInputsIfNeeded()
+      chat.refreshAuth()
+      applyRequestedCoachPromptIfNeeded()
     }
-    .onChange(of: appServer.authWebPresentation) { _, presentation in
-      authPresentation = presentation
-    }
-    .onChange(of: router.codexAuthCallbackURL) { _, callbackURL in
-      guard let callbackURL else {
+    .onChange(of: router.codexEmbeddedLoginRequestID) { _, requestID in
+      guard requestID > 0, !chat.isSignedIn else {
         return
       }
-      appServer.handleOpenURL(callbackURL)
-      router.codexAuthCallbackURL = nil
+      showingChat = true
+      chat.startOAuthSignIn()
     }
+    .onChange(of: router.coachPromptRequestID) { _, _ in
+      applyRequestedCoachPromptIfNeeded()
+    }
+  }
+
+  @ViewBuilder
+  private var chatSheetContent: some View {
+    if chat.isSignedIn {
+      CoachChatScreen(
+        chat: chat,
+        healthStore: healthStore,
+        appModel: model,
+        draft: $promptDraft,
+        scrollToBottomRequestID: router.coachScrollToBottomRequestID
+      )
+    } else {
+      CoachSignInScreen(
+        loginStatus: chat.loginStatus,
+        deviceCode: chat.deviceCode,
+        errorMessage: chat.errorMessage,
+        signIn: chat.startOAuthSignIn
+      )
+    }
+  }
+
+  private var chatStatus: String {
+    if chat.isSignedIn {
+      return chat.streamState.isStreaming ? "Streaming" : "Signed in"
+    }
+    return chat.loginStatus
+  }
+
+  private var coachSnapshot: CoachOverviewSnapshot {
+    CoachOverviewSnapshot.make(healthStore: healthStore, appModel: model)
+  }
+
+  private func openChat(prompt: String?) {
+    if let prompt {
+      let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmedPrompt.isEmpty {
+        promptDraft = trimmedPrompt
+      }
+    }
+    showingChat = true
+  }
+
+  private func applyRequestedCoachPromptIfNeeded() {
+    guard router.coachPromptRequestID != appliedCoachPromptRequestID else {
+      return
+    }
+    appliedCoachPromptRequestID = router.coachPromptRequestID
+    let prompt = router.coachPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !prompt.isEmpty else {
+      return
+    }
+    promptDraft = prompt
+    showingChat = true
   }
 }
 
-private struct CoachHeaderCard: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 10) {
-        Image(systemName: "sparkles")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(.blue)
-          .frame(width: 34, height: 34)
-          .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+private struct CoachOverviewSnapshot {
+  let recommendation: CoachRecommendation
+  let highlights: [CoachMetricHighlight]
+  let gaps: [CoachDataGap]
 
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Codex Coach")
-            .font(.headline)
-          Text("Managed login spike")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
+  @MainActor
+  static func make(healthStore: HealthDataStore, appModel: GooseAppModel) -> CoachOverviewSnapshot {
+    let homeTip = CoachTipFactory.homeTip(healthStore: healthStore, appModel: appModel)
+    let readiness = healthStore.metricInputReadinessSummary()
+    let inputNextAction = healthStore.metricInputReadinessNextActionSummary()
+    let featureNextAction = healthStore.packetDerivedFeatureNextActionSummary()
+    let scoreNextAction = healthStore.packetDerivedScoreNextActionSummary()
+    let liveHeartRate = healthStore.latestHeartRateSummary(
+      bpm: appModel.ble.liveHeartRateBPM,
+      source: appModel.ble.liveHeartRateSource,
+      updatedAt: appModel.ble.liveHeartRateUpdatedAt
+    )
+    let snapshots = [
+      healthStore.snapshot(for: .sleep),
+      healthStore.snapshot(for: .recovery),
+      healthStore.snapshot(for: .strain),
+      healthStore.snapshot(for: .stress),
+    ]
 
-        Spacer()
-      }
+    let recommendation = CoachRecommendation(
+      title: primaryFocusTitle(inputNextAction: inputNextAction, scoreNextAction: scoreNextAction, snapshots: snapshots),
+      message: firstUseful(
+        inputNextAction,
+        scoreNextAction,
+        "Review the freshest local metrics before changing training or sleep plans."
+      ),
+      evidence: [
+        "Readiness: \(readiness)",
+        "Features: \(featureNextAction)",
+        "Scores: \(scoreNextAction)",
+        "Latest HR: \(liveHeartRate)",
+      ],
+      prompt: homeTip.prompt
+    )
 
-      Text("App-owned health data, Codex-managed auth, and a narrow tool bridge for local stats and activities.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+    var highlights = snapshots.map { snapshot in
+      CoachMetricHighlight(
+        id: snapshot.route.rawValue,
+        title: snapshot.title,
+        value: snapshot.displayValue.isEmpty ? "--" : snapshot.displayValue,
+        status: snapshot.status,
+        freshness: snapshot.freshness,
+        provenance: snapshot.source.label,
+        systemImage: snapshot.systemImage,
+        tint: snapshot.tint,
+        route: snapshot.route
+      )
     }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    highlights.append(
+      CoachMetricHighlight(
+        id: "hrv",
+        title: "HRV",
+        value: healthStore.hrvFeatureSummary(),
+        status: "Packet HRV",
+        freshness: healthStore.packetInputStatus,
+        provenance: healthStore.hrvFeatureProvenanceSummary(),
+        systemImage: "waveform.path.ecg",
+        tint: .blue,
+        route: .healthMonitor
+      )
+    )
+    highlights.append(
+      CoachMetricHighlight(
+        id: "live-hr",
+        title: "Live HR",
+        value: liveHeartRate,
+        status: appModel.ble.liveHeartRateSource,
+        freshness: HealthDataStore.relativeText(for: appModel.ble.liveHeartRateUpdatedAt) ?? "Waiting",
+        provenance: healthStore.latestHeartRateProvenanceSummary(source: appModel.ble.liveHeartRateSource),
+        systemImage: "heart.fill",
+        tint: .red,
+        route: .healthMonitor
+      )
+    )
+
+    return CoachOverviewSnapshot(
+      recommendation: recommendation,
+      highlights: highlights,
+      gaps: dataGaps(
+        healthStore: healthStore,
+        snapshots: snapshots,
+        inputNextAction: inputNextAction,
+        featureNextAction: featureNextAction,
+        scoreNextAction: scoreNextAction
+      )
+    )
+  }
+
+  private static func primaryFocusTitle(
+    inputNextAction: String,
+    scoreNextAction: String,
+    snapshots: [HealthMetricSnapshot]
+  ) -> String {
+    if snapshots.contains(where: { $0.source.kind == .unavailable }) {
+      return "Close the data gaps first"
+    }
+    if !inputNextAction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return "Refresh trusted inputs"
+    }
+    if !scoreNextAction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return "Refresh score outputs"
+    }
+    return "Review today"
+  }
+
+  @MainActor
+  private static func dataGaps(
+    healthStore: HealthDataStore,
+    snapshots: [HealthMetricSnapshot],
+    inputNextAction: String,
+    featureNextAction: String,
+    scoreNextAction: String
+  ) -> [CoachDataGap] {
+    var gaps: [CoachDataGap] = []
+
+    appendGap(
+      &gaps,
+      id: "readiness",
+      title: "Input readiness",
+      detail: inputNextAction,
+      systemImage: "square.stack.3d.up",
+      tint: .blue,
+      actionTitle: "Review Inputs",
+      action: .health(.packetInputs)
+    )
+
+    appendGap(
+      &gaps,
+      id: "features",
+      title: "Packet features",
+      detail: featureNextAction,
+      systemImage: "dot.radiowaves.left.and.right",
+      tint: .cyan,
+      actionTitle: "Review Inputs",
+      action: .health(.packetInputs)
+    )
+
+    appendGap(
+      &gaps,
+      id: "scores",
+      title: "Score outputs",
+      detail: scoreNextAction,
+      systemImage: "function",
+      tint: .purple,
+      actionTitle: "Review Algorithms",
+      action: .health(.algorithms)
+    )
+
+    for snapshot in snapshots where snapshot.source.kind == .unavailable {
+      let action: CoachOverviewAction = snapshot.route == .sleep ? .more(.healthSync) : .more(.capture)
+      appendGap(
+        &gaps,
+        id: "missing-\(snapshot.route.rawValue)",
+        title: "\(snapshot.title) missing",
+        detail: snapshot.source.detail,
+        systemImage: snapshot.systemImage,
+        tint: snapshot.tint,
+        actionTitle: snapshot.route == .sleep ? "Open Health Sync" : "Open Capture",
+        action: action
+      )
+    }
+
+    appendGap(
+      &gaps,
+      id: "calibration",
+      title: "Calibration",
+      detail: healthStore.calibrationNextActionSummary(),
+      systemImage: "slider.horizontal.3",
+      tint: .mint,
+      actionTitle: "Open Calibration",
+      action: .health(.calibration)
+    )
+
+    return Array(gaps.prefix(5))
+  }
+
+  private static func appendGap(
+    _ gaps: inout [CoachDataGap],
+    id: String,
+    title: String,
+    detail: String,
+    systemImage: String,
+    tint: Color,
+    actionTitle: String,
+    action: CoachOverviewAction
+  ) {
+    let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.localizedCaseInsensitiveContains("review calibrated") == false else {
+      return
+    }
+    guard gaps.contains(where: { $0.id == id }) == false else {
+      return
+    }
+    gaps.append(
+      CoachDataGap(
+        id: id,
+        title: title,
+        detail: trimmed,
+        systemImage: systemImage,
+        tint: tint,
+        actionTitle: actionTitle,
+        action: action
+      )
+    )
+  }
+
+  private static func firstUseful(_ values: String...) -> String {
+    values
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .first { !$0.isEmpty } ?? "Review the freshest local metrics before changing training or sleep plans."
   }
 }
 
-private struct CodexServerStatusCard: View {
-  let state: CodexAppServerRunState
-  let bundleStatus: CodexAppServerBundleStatus
-  let refresh: () -> Void
-  let start: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 10) {
-        Image(systemName: statusIcon)
-          .font(.headline.weight(.semibold))
-          .foregroundStyle(statusColor)
-          .frame(width: 32, height: 32)
-          .background(statusColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(bundleStatus.title)
-            .font(.headline)
-          Text(state.displayTitle)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-        }
-
-        Spacer()
-      }
-
-      Text(state.displayDetail)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      VStack(spacing: 8) {
-        CoachStatusRow(title: "Bundle", value: bundleStatus.isBundlePresent ? "Present" : "Missing")
-        CoachStatusRow(title: "Native binary", value: bundleStatus.isBinaryPresent ? "Present" : "Missing")
-        CoachStatusRow(title: "Executable here", value: bundleStatus.canExecuteBundledServer ? "Yes" : "No")
-      }
-
-      HStack(spacing: 10) {
-        Button {
-          refresh()
-        } label: {
-          Label("Refresh", systemImage: "arrow.clockwise")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-
-        Button {
-          start()
-        } label: {
-          Label("Start", systemImage: "play.fill")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(!bundleStatus.canExecuteBundledServer)
-      }
-    }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-
-  private var statusIcon: String {
-    if bundleStatus.canExecuteBundledServer {
-      return "checkmark.circle.fill"
-    }
-    if bundleStatus.isBundlePresent {
-      return "exclamationmark.triangle.fill"
-    }
-    return "tray"
-  }
-
-  private var statusColor: Color {
-    if bundleStatus.canExecuteBundledServer {
-      return .green
-    }
-    if bundleStatus.isBundlePresent {
-      return .orange
-    }
-    return .blue
-  }
+private struct CoachRecommendation {
+  let title: String
+  let message: String
+  let evidence: [String]
+  let prompt: String
 }
 
-private struct CodexAuthCard: View {
-  @Binding var endpointText: String
-
-  let connectionState: CodexAppServerConnectionState
-  let loginStatus: String
-  let loginID: String?
-  let authPresentation: CodexAuthWebPresentation?
-  let deviceCode: CodexLoginDeviceCode?
-  let connect: () -> Void
-  let disconnect: () -> Void
-  let startLogin: () -> Void
-  let openAuth: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Label("OpenAI auth", systemImage: "person.crop.circle.badge.checkmark")
-        .font(.headline)
-
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Codex app-server endpoint")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        TextField("ws://127.0.0.1:17655", text: $endpointText)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .keyboardType(.URL)
-          .font(.footnote.monospaced())
-          .padding(10)
-          .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      }
-
-      VStack(spacing: 8) {
-        CoachStatusRow(title: "Connection", value: connectionState.title)
-        CoachStatusRow(title: "Login", value: loginStatus)
-        if let loginID {
-          CoachStatusRow(title: "Login ID", value: loginID)
-        }
-      }
-
-      Text(connectionState.detail)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if let deviceCode {
-        VStack(alignment: .leading, spacing: 8) {
-          Text(deviceCode.userCode)
-            .font(.title3.monospacedDigit().weight(.semibold))
-          Link(deviceCode.verificationURL.absoluteString, destination: deviceCode.verificationURL)
-            .font(.caption)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      }
-
-      HStack(spacing: 10) {
-        Button {
-          connect()
-        } label: {
-          Label("Connect", systemImage: "point.3.connected.trianglepath.dotted")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .disabled(connectionState.title == "Connecting")
-
-        Button {
-          startLogin()
-        } label: {
-          Label("Sign in", systemImage: "person.badge.key")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-      }
-
-      HStack(spacing: 10) {
-        Button {
-          openAuth()
-        } label: {
-          Label("Open WebView", systemImage: "safari")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .disabled(authPresentation == nil)
-
-        Button(role: .cancel) {
-          disconnect()
-        } label: {
-          Label("Disconnect", systemImage: "xmark.circle")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-      }
-    }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-}
-
-private struct CodexMessageLogCard: View {
-  let messages: [CodexAppServerMessage]
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Label("App-server messages", systemImage: "list.bullet.rectangle")
-        .font(.headline)
-
-      if messages.isEmpty {
-        Text("No messages yet.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      } else {
-        VStack(spacing: 10) {
-          ForEach(messages.prefix(8)) { message in
-            CodexMessageRow(message: message)
-          }
-        }
-      }
-    }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-}
-
-private struct CodexMessageRow: View {
-  let message: CodexAppServerMessage
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: icon)
-        .font(.caption.weight(.bold))
-        .foregroundStyle(color)
-        .frame(width: 22, height: 22)
-        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(message.title)
-            .font(.caption.weight(.semibold))
-          Spacer(minLength: 8)
-          Text(message.timestamp, style: .time)
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.tertiary)
-        }
-        Text(message.detail)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
-      }
-    }
-  }
-
-  private var icon: String {
-    switch message.level {
-    case .info:
-      return "info"
-    case .success:
-      return "checkmark"
-    case .warning:
-      return "exclamationmark"
-    case .error:
-      return "xmark"
-    }
-  }
-
-  private var color: Color {
-    switch message.level {
-    case .info:
-      return .blue
-    case .success:
-      return .green
-    case .warning:
-      return .orange
-    case .error:
-      return .red
-    }
-  }
-}
-
-private struct CoachStatusRow: View {
+private struct CoachMetricHighlight: Identifiable {
+  let id: String
   let title: String
   let value: String
-
-  var body: some View {
-    HStack {
-      Text(title)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-      Spacer()
-      Text(value)
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.primary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-    }
-  }
+  let status: String
+  let freshness: String
+  let provenance: String
+  let systemImage: String
+  let tint: Color
+  let route: HealthRoute
 }
 
-private struct CoachToolPreviewCard: View {
-  private let tools = [
-    ("load_stats", "metric readiness and score snapshots"),
-    ("get_activities", "sessions, metrics, and intervals"),
-    ("get_capture_sessions", "capture coverage and data gaps"),
-    ("get_raw_session_data", "debug-only redacted packet evidence"),
-  ]
+private struct CoachDataGap: Identifiable {
+  let id: String
+  let title: String
+  let detail: String
+  let systemImage: String
+  let tint: Color
+  let actionTitle: String
+  let action: CoachOverviewAction
+}
+
+private enum CoachOverviewAction: Hashable {
+  case health(HealthRoute)
+  case more(MoreRoute)
+  case chat(String)
+}
+
+private struct CoachOverviewScreen: View {
+  let snapshot: CoachOverviewSnapshot
+  let chatIsSignedIn: Bool
+  let chatStatus: String
+  let openChat: () -> Void
+  let openHealth: (HealthRoute?) -> Void
+  let openMore: (MoreRoute?) -> Void
+  let openChatPrompt: (String) -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Label("Tool bridge", systemImage: "wrench.and.screwdriver")
-        .font(.headline)
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 16) {
+        CoachRecommendationCard(recommendation: snapshot.recommendation) {
+          openChatPrompt(snapshot.recommendation.prompt)
+        }
 
-      ForEach(tools, id: \.0) { tool in
-        HStack(alignment: .top, spacing: 10) {
-          Image(systemName: "chevron.right")
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.tertiary)
-            .padding(.top, 4)
-          VStack(alignment: .leading, spacing: 2) {
-            Text(tool.0)
-              .font(.subheadline.weight(.semibold))
-            Text(tool.1)
-              .font(.caption)
-              .foregroundStyle(.secondary)
+        CoachOverviewChatCard(
+          signedIn: chatIsSignedIn,
+          status: chatStatus,
+          action: openChat
+        )
+
+        CoachOverviewSectionTitle("Metric Highlights")
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+          ForEach(snapshot.highlights) { highlight in
+            Button {
+              openHealth(highlight.route)
+            } label: {
+              CoachMetricHighlightCard(highlight: highlight)
+            }
+            .buttonStyle(.plain)
           }
-          Spacer()
+        }
+
+        if !snapshot.gaps.isEmpty {
+          CoachOverviewSectionTitle("Data Gaps")
+          VStack(spacing: 10) {
+            ForEach(snapshot.gaps) { gap in
+              CoachDataGapCard(gap: gap) {
+                handle(gap.action)
+              }
+            }
+          }
         }
       }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 18)
     }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .scrollClipDisabled()
+  }
+
+  private func handle(_ action: CoachOverviewAction) {
+    switch action {
+    case .health(let route):
+      openHealth(route)
+    case .more(let route):
+      openMore(route)
+    case .chat(let prompt):
+      openChatPrompt(prompt)
+    }
   }
 }
 
-private struct CoachLoginBoundaryCard: View {
+private struct CoachRecommendationCard: View {
+  let recommendation: CoachRecommendation
+  let ask: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 13) {
+      HStack(alignment: .top, spacing: 12) {
+        Image(systemName: "sparkles")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(.purple)
+          .frame(width: 38, height: 38)
+          .background(.purple.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+        VStack(alignment: .leading, spacing: 5) {
+          Text(recommendation.title)
+            .font(.title3.weight(.semibold))
+          Text(recommendation.message)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 7) {
+        ForEach(recommendation.evidence, id: \.self) { evidence in
+          Label(evidence, systemImage: "checkmark.seal")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      Button(action: ask) {
+        Label("Ask About This", systemImage: "bubble.left.and.bubble.right")
+          .font(.subheadline.weight(.semibold))
+          .frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent)
+    }
+    .padding(16)
+    .coachCardSurface(tint: .purple, prominent: true)
+  }
+}
+
+private struct CoachOverviewChatCard: View {
+  let signedIn: Bool
+  let status: String
+  let action: () -> Void
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Image(systemName: signedIn ? "bubble.left.and.bubble.right.fill" : "person.crop.circle.badge.checkmark")
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(signedIn ? .blue : .secondary)
+        .frame(width: 36, height: 36)
+        .background((signedIn ? Color.blue : Color.secondary).opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(signedIn ? "Chat ready" : "Chat signed out")
+          .font(.headline)
+        Text(status.isEmpty ? "Local Coach works without chat" : status)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+
+      Spacer(minLength: 8)
+
+      Button(signedIn ? "Open" : "Sign In", action: action)
+        .font(.caption.weight(.semibold))
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+    .padding(14)
+    .coachCardSurface(tint: .blue)
+  }
+}
+
+private struct CoachMetricHighlightCard: View {
+  let highlight: CoachMetricHighlight
+
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Label("Login boundary", systemImage: "lock.shield")
-        .font(.headline)
+      HStack(spacing: 8) {
+        Image(systemName: highlight.systemImage)
+          .font(.caption.weight(.bold))
+          .foregroundStyle(highlight.tint)
+        Text(highlight.title)
+          .font(.caption.weight(.bold))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Spacer(minLength: 0)
+      }
 
-      Text("The app requests managed ChatGPT login from Codex and does not handle OpenAI tokens directly. Completion comes back through Codex app-server notifications and app callbacks.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      Text(highlight.value)
+        .font(.title3.weight(.semibold))
+        .fontDesign(.rounded)
+        .lineLimit(2)
+        .minimumScaleFactor(0.70)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(highlight.status)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+        Text(highlight.freshness)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Text(highlight.provenance)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Spacer(minLength: 0)
     }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .frame(maxWidth: .infinity, minHeight: 154, alignment: .topLeading)
+    .padding(13)
+    .coachCardSurface(tint: highlight.tint)
   }
 }
 
-#Preview {
+private struct CoachDataGapCard: View {
+  let gap: CoachDataGap
+  let action: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      Image(systemName: gap.systemImage)
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(gap.tint)
+        .frame(width: 34, height: 34)
+        .background(gap.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+      VStack(alignment: .leading, spacing: 5) {
+        Text(gap.title)
+          .font(.subheadline.weight(.semibold))
+        Text(gap.detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Spacer(minLength: 8)
+
+      Button(gap.actionTitle, action: action)
+        .font(.caption.weight(.semibold))
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+    .padding(13)
+    .coachCardSurface(tint: gap.tint)
+  }
+}
+
+private struct CoachOverviewSectionTitle: View {
+  let title: String
+
+  init(_ title: String) {
+    self.title = title
+  }
+
+  var body: some View {
+    Text(title)
+      .font(.headline.weight(.semibold))
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 2)
+  }
+}
+
+private extension View {
+  func coachCardSurface(tint: Color, prominent: Bool = false) -> some View {
+    background(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(Color(.secondarySystemGroupedBackground))
+        .shadow(color: tint.opacity(prominent ? 0.16 : 0.08), radius: prominent ? 14 : 8, x: 0, y: prominent ? 7 : 3)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(tint.opacity(prominent ? 0.18 : 0.10), lineWidth: 1)
+    }
+  }
+}
+
+private struct CoachProfileMenu: View {
+  @ObservedObject var chat: OpenAICoachChatModel
+
+  var body: some View {
+    Menu {
+      Section("Model") {
+        ForEach(CoachModelPreset.allCases) { preset in
+          Button {
+            chat.selectModelPreset(preset)
+          } label: {
+            if chat.modelPreset == preset {
+              Label(preset.title, systemImage: "checkmark")
+            } else {
+              Text(preset.title)
+            }
+          }
+        }
+      }
+
+      Button(role: .destructive) {
+        chat.startNewConversation()
+      } label: {
+        Label("New Conversation", systemImage: "plus.message")
+      }
+      .disabled(chat.streamState.isStreaming)
+
+      Button(role: .destructive) {
+        chat.signOut()
+      } label: {
+        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+      }
+    } label: {
+      Image(systemName: "person.crop.circle")
+    }
+    .accessibilityLabel("Coach account")
+  }
+}
+
+#Preview("Signed out") {
   NavigationStack {
-    CoachView()
+    CoachView(healthStore: HealthDataStore())
       .environmentObject(GooseAppModel(startBLE: false))
       .environmentObject(AppRouter())
   }

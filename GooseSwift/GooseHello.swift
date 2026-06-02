@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum GooseHello {
   static let clientHelloFrameHex = "aa0108000001e67123019101363e5c8d"
@@ -33,5 +34,8 @@ extension Data {
   var hexString: String {
     map { String(format: "%02x", $0) }.joined()
   }
-}
 
+  var sha256HexString: String {
+    SHA256.hash(data: self).map { String(format: "%02x", $0) }.joined()
+  }
+}

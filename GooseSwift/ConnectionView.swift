@@ -19,6 +19,7 @@ private struct ConnectionContentView: View {
         LabeledContent("Bluetooth", value: ble.bluetoothState)
         LabeledContent("Connection", value: ble.connectionState)
         LabeledContent("Reconnect", value: ble.reconnectState)
+        LabeledContent("Historical", value: historicalSyncValue)
         LabeledContent("Remembered", value: ble.rememberedDeviceDescription)
         LabeledContent("Live HR", value: liveHeartRateValue)
         LabeledContent("Rust", value: model.rustStatus)
@@ -48,6 +49,11 @@ private struct ConnectionContentView: View {
           ble.sendClientHello()
         }
         .disabled(!ble.canSendHello)
+
+        Button(ble.isHistoricalSyncing ? "Syncing Historical Packets" : "Request Historical Packets") {
+          ble.syncHistoricalPackets()
+        }
+        .disabled(!ble.canSyncHistorical)
 
         Button("Forget Remembered Device", role: .destructive) {
           ble.forgetRememberedDevice()
@@ -110,6 +116,7 @@ private struct ConnectionContentView: View {
         }
       }
     }
+    .gooseListBackground()
     .navigationTitle("Connect")
   }
 
@@ -121,5 +128,17 @@ private struct ConnectionContentView: View {
       return "\(bpm) bpm via \(ble.liveHeartRateSource) @ \(updatedAt.formatted(date: .omitted, time: .standard))"
     }
     return "\(bpm) bpm via \(ble.liveHeartRateSource)"
+  }
+
+  private var historicalSyncValue: String {
+    let packetCount = ble.historicalPacketCount
+    let packets = "\(packetCount) \(packetCount == 1 ? "packet" : "packets")"
+    if ble.isHistoricalSyncing {
+      return "syncing | \(packets)"
+    }
+    if let completedAt = ble.lastHistoricalSyncCompletedAt {
+      return "\(ble.historicalSyncStatus) | \(packets) @ \(completedAt.formatted(date: .omitted, time: .standard))"
+    }
+    return "\(ble.historicalSyncStatus) | \(packets)"
   }
 }

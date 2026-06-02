@@ -2,7 +2,7 @@
 
 Source map: Flutter `TodayView`, Flutter `GooseShell` Overview tab, Swift `AppShellView` Home tab, Swift `DeviceView`.
 
-MVP rule: Home is the daily command center. It should show today's live state first, use real connected-device and local metric data when present, and fall back to clearly marked sample/empty states only where no Swift data bridge exists yet.
+MVP rule: Home is the daily command center. It should show today's live state first, use real connected-device and local metric data when present, and fall back to empty, stale, or unavailable states where no Swift data bridge exists yet.
 
 ## Parent View Contract
 
@@ -10,8 +10,8 @@ MVP rule: Home is the daily command center. It should show today's live state fi
 - [ ] Keep this tab behind the Swift `Home` tab item.
 - [ ] Use `NavigationStack` routes for device, score detail, health monitor, timeline item, journal, activity, capture, and settings.
 - [ ] Define a `HomeSnapshot` value type that can be populated from `GooseAppModel`, `GooseBLEClient`, and Rust/local store calls.
-- [ ] Add loading, empty, stale, and sample-data states per section.
-- [ ] Add previews for connected, disconnected, no-data, and populated sample days.
+- [ ] Add loading, empty, stale, and unavailable states per section; do not use sample data at runtime.
+- [ ] Add previews for connected, disconnected, no-data, and populated real-data days.
 - [ ] Add accessibility labels for every tappable card and date/device control.
 
 ## Top Chrome And Date
@@ -54,7 +54,7 @@ MVP rule: Home is the daily command center. It should show today's live state fi
 - [ ] Show score next action from `packetDerivedScoreNextActionSummary()`.
 - [ ] Provide a clear route into Coach for the day's recommendation.
 - [ ] Provide a clear route into Capture when the next action needs fresh data.
-- [ ] Provide sample-state copy only when readiness is missing or pending.
+- [ ] Provide missing-data copy when readiness is missing or pending.
 
 ## Stress And Energy
 
@@ -62,8 +62,8 @@ MVP rule: Home is the daily command center. It should show today's live state fi
 - [ ] Link Stress card to Health > Stress detail.
 - [ ] Add Energy Bank card based on Flutter `V2EnergyBankPage`.
 - [ ] Track Energy Bank data points: energy level, stress value, total charged, total drained, primary sleep contribution, usage window.
-- [ ] Add chart placeholder state until Swift has the energy time-series bridge.
-- [ ] Show coaching copy only from computed/local data or mark as sample.
+- [ ] Add unavailable chart state until Swift has the energy time-series bridge.
+- [ ] Show coaching copy only from computed/local data or explicit missing-data state.
 
 ## Health Monitor Preview
 
@@ -96,7 +96,7 @@ MVP rule: Home is the daily command center. It should show today's live state fi
 
 - [ ] Show Rust core version from `model.rustStatus`.
 - [ ] Show local database/store path or "pending".
-- [ ] Show mode: local data, live device, imported capture, or sample UI.
+- [ ] Show mode: local data, live device, imported capture, or unavailable.
 - [ ] Link to More > Debug when evidence/provenance is tapped.
 - [ ] Include latest HR, sleep, recovery, and strain provenance when present.
 

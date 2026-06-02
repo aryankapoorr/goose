@@ -1,4 +1,5 @@
 import CoreBluetooth
+import CoreLocation
 import HealthKit
 import SwiftUI
 import UIKit
@@ -7,15 +8,19 @@ import UserNotifications
 struct OnboardingView: View {
   @EnvironmentObject private var model: GooseAppModel
   let onComplete: () -> Void
+  @StateObject private var locationPermissionRequester = OnboardingLocationPermissionRequester()
 
-  @State private var step = OnboardingStep.profile
+  @State private var step = OnboardingStep.healthKit
   @State private var dateOfBirth = OnboardingDate.defaultDateOfBirth()
   @State private var validationMessage: String?
   @State private var healthKitStatus = "Not requested"
   @State private var healthKitRequesting = false
+  @State private var locationStatus = "Not requested"
+  @State private var locationRequesting = false
   @State private var notificationStatus = "Not requested"
   @State private var notificationRequesting = false
   @State private var bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
+  @State private var locationPermissionResolved = OnboardingPermissionState.locationResolved()
   @State private var notificationPermissionResolved = false
   @FocusState private var focusedField: OnboardingInputField?
 
@@ -32,6 +37,7 @@ struct OnboardingView: View {
   @AppStorage(OnboardingStorage.createdAtUnixMs) private var createdAtUnixMs = 0
   @AppStorage(OnboardingStorage.timezoneID) private var timezoneID = ""
   @AppStorage(OnboardingStorage.healthKitPermissionHandled) private var healthKitPermissionHandled = false
+  @AppStorage(OnboardingStorage.locationPermissionHandled) private var locationPermissionHandled = false
   @AppStorage(OnboardingStorage.notificationPermissionHandled) private var notificationPermissionHandled = false
 
   var body: some View {
@@ -48,7 +54,7 @@ struct OnboardingView: View {
     }
     .background {
       ZStack {
-        Color(.systemGroupedBackground)
+        GooseTheme.appBackground
           .ignoresSafeArea()
           .onTapGesture {
             focusedField = nil
@@ -109,16 +115,30 @@ struct OnboardingView: View {
       OnboardingPermissionStep(
         systemImage: "heart.fill",
         title: "HealthKit",
-        bodyText: "Goose uses HealthKit to compare WHOOP reads with local health signals on this iPhone.",
+        bodyText: "Goose uses HealthKit only to prefill profile values.",
         details: [
-          "Heart rate, HRV, respiratory rate, and oxygen saturation",
-          "Sleep, steps, active energy, and body temperature",
-          "Read-only access from Apple Health",
+          "Body weight to prefill your profile",
+          "No steps, calories, workouts, sleep, or recovery metrics imported",
         ],
-        buttonTitle: "Enable HealthKit",
+        buttonTitle: "Import Weight",
         isRequesting: healthKitRequesting,
         tint: .red,
         action: requestHealthKitAccess
+      )
+    case .location:
+      OnboardingPermissionStep(
+        systemImage: "location.fill",
+        title: "Location",
+        bodyText: "Goose uses location to track outdoor workouts, routes, pace, and distance while an activity is running.",
+        details: [
+          "Active workout GPS while Goose is open",
+          "Background route tracking when you minimize Goose",
+          "Distance, pace, elevation, and route points",
+        ],
+        buttonTitle: "Enable Location",
+        isRequesting: locationRequesting,
+        tint: .green,
+        action: requestLocationAccess
       )
     case .bluetooth:
       OnboardingPermissionStep(
@@ -161,12 +181,13 @@ struct OnboardingView: View {
       OnboardingConnectActionBar(
         ble: model.ble,
         onBack: moveBack,
-        onComplete: finishOnboarding
+        readyTitle: nextAvailableStep(after: step) == nil ? "Finish setup" : "Continue",
+        onComplete: moveForward
       )
     } else {
       OnboardingStandardActionBar(
-        showBack: step != .profile,
-        primaryTitle: "Continue",
+        showBack: step.previous != nil,
+        primaryTitle: standardPrimaryTitle,
         onBack: moveBack,
         onPrimary: continueFromCurrentStep
       )
@@ -174,6 +195,7 @@ struct OnboardingView: View {
   }
 
   private func hydrateOnAppear() {
+    restorePersistedProfileIfNeeded()
     hydrateDateOfBirth()
     hydrateMeasurementsIfNeeded()
     refreshPermissionState()
@@ -211,11 +233,29 @@ struct OnboardingView: View {
   }
 
   private func continueFromCurrentStep() {
+    if step == .healthKit {
+      requestHealthKitAccess()
+      return
+    }
+    if step == .location {
+      requestLocationAccess()
+      return
+    }
     if step == .profile {
       saveProfileAndContinue()
       return
     }
     moveForward()
+  }
+
+  private var standardPrimaryTitle: String {
+    if step == .healthKit {
+      return "Import Weight"
+    }
+    if step == .location {
+      return "Enable Location"
+    }
+    return nextAvailableStep(after: step) == nil ? "Finish setup" : "Continue"
   }
 
   private func saveProfileAndContinue() {
@@ -260,6 +300,10 @@ struct OnboardingView: View {
     weightGrams = parsedWeightGrams
     createdAtUnixMs = Int((Date().timeIntervalSince1970 * 1000).rounded())
     timezoneID = TimeZone.current.identifier
+    OnboardingProfilePersistence.saveProfile(
+      currentProfileSnapshot(),
+      onboardingComplete: false
+    )
     model.recordUIAction(
       "onboarding.profile.saved",
       detail: "\(unitSystem.rawValue) height_mm=\(heightMm) weight_g=\(weightGrams)"
@@ -361,12 +405,43 @@ struct OnboardingView: View {
     model.recordUIAction("onboarding.healthkit.requested")
 
     Task {
-      let status = await HealthKitPermissionRequester.requestReadAccess()
+      let result = await HealthKitPermissionRequester.requestAccess()
       await MainActor.run {
-        healthKitStatus = status
+        healthKitStatus = result.status
+        applyHealthKitProfileAutofill(result.autofill, overwrite: false)
         healthKitRequesting = false
         healthKitPermissionHandled = true
-        model.recordUIAction("onboarding.healthkit.result", detail: status)
+        model.recordUIAction("onboarding.healthkit.result", detail: result.status)
+        moveForward()
+      }
+    }
+  }
+
+  private func applyHealthKitProfileAutofill(_ autofill: HealthKitProfileAutofill, overwrite: Bool) {
+    let unitSystem = OnboardingUnitSystem(rawValue: unitSystemRaw) ?? .imperial
+    if let grams = autofill.weightGrams,
+       overwrite || (weightGrams == 0 && weightInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+      weightGrams = grams
+      applyWeightGrams(grams, for: unitSystem)
+    }
+  }
+
+  private func requestLocationAccess() {
+    guard !locationRequesting else {
+      return
+    }
+    locationRequesting = true
+    locationStatus = "Requesting..."
+    model.recordUIAction("onboarding.location.requested")
+
+    Task {
+      let result = await locationPermissionRequester.requestAccess()
+      await MainActor.run {
+        locationStatus = result.status
+        locationRequesting = false
+        locationPermissionHandled = result.isResolved
+        locationPermissionResolved = result.isResolved || OnboardingPermissionState.locationResolved()
+        model.recordUIAction("onboarding.location.result", detail: result.status)
         moveForward()
       }
     }
@@ -432,12 +507,83 @@ struct OnboardingView: View {
   }
 
   private func finishOnboarding() {
+    OnboardingProfilePersistence.markCompleteFromDefaults()
     model.recordUIAction("onboarding.finish", detail: "step=\(step.rawValue)")
     onComplete()
   }
 
+  private func restorePersistedProfileIfNeeded() {
+    guard
+      let state = OnboardingProfilePersistence.restoreIntoDefaultsIfAvailable(restoreCompletion: false),
+      state.profile.hasRequiredDetails
+    else {
+      return
+    }
+    applyPersistedProfile(state.profile)
+  }
+
+  private func currentProfileSnapshot() -> OnboardingProfileSnapshot {
+    OnboardingProfileSnapshot(
+      firstName: firstName,
+      dateOfBirthString: dateOfBirthString,
+      unitSystemRaw: unitSystemRaw,
+      heightInput: heightInput,
+      heightFeetInput: heightFeetInput,
+      heightInchesInput: heightInchesInput,
+      weightInput: weightInput,
+      genderRaw: genderRaw,
+      heightMm: heightMm,
+      weightGrams: weightGrams,
+      createdAtUnixMs: createdAtUnixMs,
+      timezoneID: timezoneID
+    )
+  }
+
+  private func applyPersistedProfile(_ profile: OnboardingProfileSnapshot) {
+    if firstName.isEmpty {
+      firstName = profile.firstName
+    }
+    if dateOfBirthString.isEmpty {
+      dateOfBirthString = profile.dateOfBirthString
+    }
+    if unitSystemRaw.isEmpty {
+      unitSystemRaw = profile.unitSystemRaw
+    }
+    if heightInput.isEmpty {
+      heightInput = profile.heightInput
+    }
+    if heightFeetInput.isEmpty {
+      heightFeetInput = profile.heightFeetInput
+    }
+    if heightInchesInput.isEmpty {
+      heightInchesInput = profile.heightInchesInput
+    }
+    if weightInput.isEmpty {
+      weightInput = profile.weightInput
+    }
+    if genderRaw.isEmpty {
+      genderRaw = profile.genderRaw
+    }
+    if heightMm == 0 {
+      heightMm = profile.heightMm
+    }
+    if weightGrams == 0 {
+      weightGrams = profile.weightGrams
+    }
+    if createdAtUnixMs == 0 {
+      createdAtUnixMs = profile.createdAtUnixMs
+    }
+    if timezoneID.isEmpty {
+      timezoneID = profile.timezoneID
+    }
+  }
+
   private func refreshPermissionState() {
     bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
+    locationPermissionResolved = OnboardingPermissionState.locationResolved()
+    if locationPermissionResolved {
+      locationPermissionHandled = true
+    }
     Task {
       let resolved = await OnboardingPermissionState.notificationResolved()
       await MainActor.run {
@@ -455,6 +601,8 @@ struct OnboardingView: View {
       return false
     case .healthKit:
       return healthKitPermissionHandled || !HKHealthStore.isHealthDataAvailable()
+    case .location:
+      return locationPermissionHandled || locationPermissionResolved
     case .bluetooth:
       return bluetoothPermissionResolved || bluetoothStateIsResolved
     case .notifications:
@@ -485,918 +633,5 @@ struct OnboardingView: View {
       candidate = step.previous
     }
     return candidate
-  }
-}
-
-private enum OnboardingStep: Int, CaseIterable {
-  case profile
-  case healthKit
-  case bluetooth
-  case notifications
-  case connect
-
-  var title: String {
-    switch self {
-    case .profile:
-      return "Set up Goose"
-    case .healthKit:
-      return "Connect HealthKit"
-    case .bluetooth:
-      return "Enable Bluetooth"
-    case .notifications:
-      return "Enable Notifications"
-    case .connect:
-      return "Connect your WHOOP"
-    }
-  }
-
-  var progress: Double {
-    Double(rawValue + 1) / Double(Self.allCases.count)
-  }
-
-  var stepLabel: String {
-    "Step \(rawValue + 1) of \(Self.allCases.count)"
-  }
-
-  var next: OnboardingStep? {
-    Self(rawValue: rawValue + 1)
-  }
-
-  var previous: OnboardingStep? {
-    Self(rawValue: rawValue - 1)
-  }
-}
-
-private enum OnboardingInputField: Hashable {
-  case firstName
-  case heightCentimeters
-  case heightFeet
-  case heightInches
-  case weight
-}
-
-private enum OnboardingUnitSystem: String, CaseIterable, Identifiable {
-  case imperial
-  case metric
-
-  var id: String { rawValue }
-
-  var title: String {
-    switch self {
-    case .imperial:
-      return "Imperial"
-    case .metric:
-      return "Metric"
-    }
-  }
-}
-
-private enum OnboardingGender: String, CaseIterable, Identifiable {
-  case female
-  case male
-  case nonBinary = "non_binary"
-  case preferNotToSay = "prefer_not_to_say"
-
-  var id: String { rawValue }
-
-  var title: String {
-    switch self {
-    case .female:
-      return "Female"
-    case .male:
-      return "Male"
-    case .nonBinary:
-      return "Non-binary"
-    case .preferNotToSay:
-      return "Prefer not to say"
-    }
-  }
-}
-
-private enum OnboardingStorage {
-  static let firstName = "goose.swift.profile.firstName"
-  static let dateOfBirth = "goose.swift.profile.dateOfBirth"
-  static let unitSystem = "goose.swift.profile.unitSystem"
-  static let heightInput = "goose.swift.profile.heightInput"
-  static let heightFeetInput = "goose.swift.profile.heightFeetInput"
-  static let heightInchesInput = "goose.swift.profile.heightInchesInput"
-  static let weightInput = "goose.swift.profile.weightInput"
-  static let gender = "goose.swift.profile.gender"
-  static let heightMm = "goose.swift.profile.heightMm"
-  static let weightGrams = "goose.swift.profile.weightGrams"
-  static let createdAtUnixMs = "goose.swift.profile.createdAtUnixMs"
-  static let timezoneID = "goose.swift.profile.timezoneID"
-  static let healthKitPermissionHandled = "goose.swift.permissions.healthKitHandled"
-  static let notificationPermissionHandled = "goose.swift.permissions.notificationHandled"
-}
-
-private enum OnboardingPermissionState {
-  static func bluetoothResolved() -> Bool {
-    switch CBManager.authorization {
-    case .notDetermined:
-      return false
-    case .allowedAlways, .denied, .restricted:
-      return true
-    @unknown default:
-      return false
-    }
-  }
-
-  static func notificationResolved() async -> Bool {
-    await withCheckedContinuation { continuation in
-      UNUserNotificationCenter.current().getNotificationSettings { settings in
-        continuation.resume(returning: settings.authorizationStatus != .notDetermined)
-      }
-    }
-  }
-}
-
-private enum OnboardingDate {
-  static func parse(_ value: String) -> Date? {
-    let formatter = dateFormatter
-    guard let date = formatter.date(from: value) else {
-      return nil
-    }
-    return Calendar.current.startOfDay(for: date)
-  }
-
-  static func dateOnlyString(_ date: Date) -> String {
-    dateFormatter.string(from: date)
-  }
-
-  static func defaultDateOfBirth() -> Date {
-    clamp(Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
-  }
-
-  static func minimumDateOfBirth() -> Date {
-    Calendar.current.date(byAdding: .year, value: -120, to: Date()) ?? Date.distantPast
-  }
-
-  static func maximumDateOfBirth() -> Date {
-    Calendar.current.date(byAdding: .year, value: -13, to: Date()) ?? Date()
-  }
-
-  static func clamp(_ date: Date) -> Date {
-    let normalized = Calendar.current.startOfDay(for: date)
-    let minimum = Calendar.current.startOfDay(for: minimumDateOfBirth())
-    let maximum = Calendar.current.startOfDay(for: maximumDateOfBirth())
-    if normalized < minimum {
-      return minimum
-    }
-    if normalized > maximum {
-      return maximum
-    }
-    return normalized
-  }
-
-  private static var dateFormatter: DateFormatter {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter
-  }
-}
-
-private enum HealthKitPermissionRequester {
-  static func requestReadAccess() async -> String {
-    guard HKHealthStore.isHealthDataAvailable() else {
-      return "Unavailable on this device"
-    }
-
-    let store = HKHealthStore()
-    var readTypes = Set<HKObjectType>()
-    let quantityIdentifiers: [HKQuantityTypeIdentifier] = [
-      .heartRate,
-      .restingHeartRate,
-      .heartRateVariabilitySDNN,
-      .respiratoryRate,
-      .oxygenSaturation,
-      .stepCount,
-      .activeEnergyBurned,
-      .bodyTemperature,
-    ]
-    for identifier in quantityIdentifiers {
-      if let type = HKObjectType.quantityType(forIdentifier: identifier) {
-        readTypes.insert(type)
-      }
-    }
-    if let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-      readTypes.insert(sleepType)
-    }
-
-    do {
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-        store.requestAuthorization(toShare: Set<HKSampleType>(), read: readTypes) { success, error in
-          if let error {
-            continuation.resume(throwing: error)
-          } else if success {
-            continuation.resume()
-          } else {
-            continuation.resume(throwing: HealthKitPermissionError.notAllowed)
-          }
-        }
-      }
-      return "Requested in Health"
-    } catch {
-      return "Failed: \(error.localizedDescription)"
-    }
-  }
-}
-
-private enum HealthKitPermissionError: LocalizedError {
-  case notAllowed
-
-  var errorDescription: String? {
-    "Health access was not allowed."
-  }
-}
-
-private struct OnboardingHeader: View {
-  let step: OnboardingStep
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text(step.stepLabel)
-        Spacer()
-        Text("\(Int((step.progress * 100).rounded()))%")
-      }
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(.secondary)
-
-      Text(step.title)
-        .font(.system(size: 34, weight: .bold, design: .rounded))
-        .foregroundStyle(.primary)
-      ProgressView(value: step.progress)
-        .tint(.blue)
-    }
-  }
-}
-
-private struct OnboardingProfileStep: View {
-  @Binding var firstName: String
-  @Binding var dateOfBirth: Date
-  @Binding var unitSystemRaw: String
-  @Binding var heightInput: String
-  @Binding var heightFeetInput: String
-  @Binding var heightInchesInput: String
-  @Binding var weightInput: String
-  @Binding var genderRaw: String
-  let validationMessage: String?
-  let focusedField: FocusState<OnboardingInputField?>.Binding
-
-  private var unitSystem: OnboardingUnitSystem {
-    OnboardingUnitSystem(rawValue: unitSystemRaw) ?? .imperial
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      Text("These basics help Goose calculate your local metrics.")
-        .font(.body)
-        .foregroundStyle(.secondary)
-
-      OnboardingGroupedSection {
-        OnboardingTextFieldRow(
-          label: "First name",
-          text: $firstName,
-          prompt: "First name",
-          keyboardType: .default,
-          textContentType: .givenName,
-          field: .firstName,
-          focusedField: focusedField
-        )
-        OnboardingDivider()
-        DatePicker(
-          "Date of birth",
-          selection: $dateOfBirth,
-          in: OnboardingDate.minimumDateOfBirth()...OnboardingDate.maximumDateOfBirth(),
-          displayedComponents: .date
-        )
-        .font(.body)
-        .padding(.horizontal, 16)
-        .frame(minHeight: 50)
-      }
-
-      VStack(alignment: .leading, spacing: 10) {
-        OnboardingSectionLabel("Units")
-        Picker("Units", selection: $unitSystemRaw) {
-          ForEach(OnboardingUnitSystem.allCases) { unit in
-            Text(unit.title).tag(unit.rawValue)
-          }
-        }
-        .pickerStyle(.segmented)
-      }
-
-      VStack(alignment: .leading, spacing: 10) {
-        OnboardingSectionLabel("Measurements")
-        OnboardingGroupedSection {
-          if unitSystem == .metric {
-            OnboardingTextFieldRow(
-              label: "Height",
-              text: $heightInput,
-              prompt: "cm",
-              keyboardType: .decimalPad,
-              suffix: "cm",
-              field: .heightCentimeters,
-              focusedField: focusedField
-            )
-          } else {
-            OnboardingImperialHeightRow(
-              feet: $heightFeetInput,
-              inches: $heightInchesInput,
-              focusedField: focusedField
-            )
-          }
-          OnboardingDivider()
-          OnboardingTextFieldRow(
-            label: "Weight",
-            text: $weightInput,
-            prompt: unitSystem == .metric ? "kg" : "lb",
-            keyboardType: .decimalPad,
-            suffix: unitSystem == .metric ? "kg" : "lb",
-            field: .weight,
-            focusedField: focusedField
-          )
-        }
-      }
-
-      VStack(alignment: .leading, spacing: 10) {
-        OnboardingSectionLabel("Gender")
-        OnboardingGroupedSection {
-          Picker("Gender", selection: $genderRaw) {
-            Text("Select").tag("")
-            ForEach(OnboardingGender.allCases) { gender in
-              Text(gender.title).tag(gender.rawValue)
-            }
-          }
-          .pickerStyle(.menu)
-          .font(.body)
-          .padding(.horizontal, 16)
-          .frame(minHeight: 50)
-        }
-      }
-
-      if let validationMessage {
-        Text(validationMessage)
-          .font(.footnote)
-          .foregroundStyle(.red)
-          .padding(.horizontal, 4)
-      }
-    }
-  }
-}
-
-private struct OnboardingPermissionStep: View {
-  let systemImage: String
-  let title: String
-  let bodyText: String
-  let details: [String]
-  let buttonTitle: String
-  let isRequesting: Bool
-  let tint: Color
-  let action: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      Text(bodyText)
-        .font(.body)
-        .foregroundStyle(.secondary)
-
-      OnboardingGroupedSection {
-        VStack(alignment: .leading, spacing: 16) {
-          HStack(spacing: 12) {
-            Image(systemName: systemImage)
-              .font(.headline)
-              .foregroundStyle(tint)
-              .frame(width: 36, height: 36)
-              .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Text(title)
-              .font(.headline)
-          }
-
-          VStack(alignment: .leading, spacing: 10) {
-            ForEach(details, id: \.self) { detail in
-              Label(detail, systemImage: "checkmark.circle.fill")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
-            }
-          }
-
-          Button(action: action) {
-            HStack {
-              if isRequesting {
-                ProgressView()
-              }
-              Text(buttonTitle)
-                .frame(maxWidth: .infinity)
-            }
-          }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
-          .disabled(isRequesting)
-        }
-        .padding(16)
-      }
-    }
-  }
-}
-
-private struct OnboardingConnectStep: View {
-  @ObservedObject var ble: GooseBLEClient
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color(.secondarySystemGroupedBackground))
-        .aspectRatio(1.7, contentMode: .fit)
-        .overlay {
-          Image("onboarding_pairing_help")
-            .resizable()
-            .scaledToFit()
-            .padding(18)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-      VStack(alignment: .leading, spacing: 8) {
-        Text(connectHeading)
-          .font(.title2.weight(.bold))
-        Text(connectBody)
-          .font(.body)
-          .foregroundStyle(.secondary)
-      }
-
-      OnboardingStateRow(systemImage: connectIcon, label: connectStateLabel, detail: ble.connectionState)
-
-      if !ble.discoveredDevices.isEmpty {
-        VStack(alignment: .leading, spacing: 10) {
-          OnboardingSectionLabel("Choose your strap")
-          VStack(spacing: 8) {
-            ForEach(ble.discoveredDevices.prefix(4)) { device in
-              OnboardingDiscoveredStrapRow(
-                device: device,
-                selected: ble.selectedDeviceID == device.id
-              ) {
-                ble.select(device)
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  private var hasDiscoveredStraps: Bool {
-    !ble.discoveredDevices.isEmpty
-  }
-
-  private var connected: Bool {
-    ["connecting", "discovering", "connected", "ready"].contains(ble.connectionState)
-  }
-
-  private var canVerify: Bool {
-    ble.connectionState == "ready"
-      || ble.liveHeartRateBPM != nil
-      || ble.batteryLevelPercent != nil
-      || ble.firmwareVersion != nil
-      || ble.modelNumber != nil
-  }
-
-  private var searching: Bool {
-    ble.isScanning || ble.bluetoothState == "waiting for bluetooth"
-  }
-
-  private var connectHeading: String {
-    if canVerify {
-      return "WHOOP is connected"
-    }
-    if connected {
-      return "Reading strap data"
-    }
-    if hasDiscoveredStraps {
-      return "We found a WHOOP nearby"
-    }
-    if searching {
-      return "Looking for your WHOOP"
-    }
-    return "Pair your WHOOP strap"
-  }
-
-  private var connectBody: String {
-    if canVerify {
-      return "Finish setup to start using Goose with this strap."
-    }
-    if connected {
-      return "Keep the strap close while Goose confirms it can read data."
-    }
-    if hasDiscoveredStraps {
-      return "Select the strap you want to use with Goose."
-    }
-    if searching {
-      return "Keep Bluetooth on and keep the strap close to this phone."
-    }
-    return "Take the strap off your wrist, keep it nearby, then start pairing."
-  }
-
-  private var connectStateLabel: String {
-    if canVerify {
-      return "Connected and ready"
-    }
-    if connected {
-      return "Connected"
-    }
-    if hasDiscoveredStraps {
-      return "Strap found"
-    }
-    if searching {
-      return "Searching"
-    }
-    return "Ready to pair"
-  }
-
-  private var connectIcon: String {
-    if canVerify || connected {
-      return "checkmark.circle.fill"
-    }
-    if searching {
-      return "antenna.radiowaves.left.and.right"
-    }
-    return "bluetooth"
-  }
-}
-
-private struct OnboardingStandardActionBar: View {
-  let showBack: Bool
-  let primaryTitle: String
-  let onBack: () -> Void
-  let onPrimary: () -> Void
-
-  var body: some View {
-    HStack(spacing: 12) {
-      if showBack {
-        Button(action: onBack) {
-          Label("Back", systemImage: "chevron.left")
-            .labelStyle(.titleAndIcon)
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-      }
-      Button(action: onPrimary) {
-        Text(primaryTitle)
-          .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.borderedProminent)
-      .controlSize(.large)
-    }
-    .padding(16)
-    .background(.regularMaterial)
-  }
-}
-
-private struct OnboardingConnectActionBar: View {
-  @ObservedObject var ble: GooseBLEClient
-  let onBack: () -> Void
-  let onComplete: () -> Void
-
-  var body: some View {
-    VStack(spacing: 10) {
-      Button(action: primaryAction) {
-        Text(primaryTitle)
-          .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.borderedProminent)
-      .controlSize(.large)
-      .disabled(primaryDisabled)
-
-      if hasDiscoveredStraps && !connected {
-        Button("Search again", action: startPairing)
-          .buttonStyle(.bordered)
-          .controlSize(.large)
-          .frame(maxWidth: .infinity)
-      }
-
-      Button(action: onBack) {
-        Label("Back", systemImage: "chevron.left")
-          .labelStyle(.titleAndIcon)
-          .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.bordered)
-      .controlSize(.large)
-    }
-    .padding(16)
-    .background(.regularMaterial)
-  }
-
-  private var hasDiscoveredStraps: Bool {
-    !ble.discoveredDevices.isEmpty
-  }
-
-  private var connected: Bool {
-    ["connecting", "discovering", "connected", "ready"].contains(ble.connectionState)
-  }
-
-  private var canVerify: Bool {
-    ble.connectionState == "ready"
-      || ble.liveHeartRateBPM != nil
-      || ble.batteryLevelPercent != nil
-      || ble.firmwareVersion != nil
-      || ble.modelNumber != nil
-  }
-
-  private var searching: Bool {
-    ble.isScanning
-  }
-
-  private var primaryTitle: String {
-    if canVerify {
-      return "Finish setup"
-    }
-    if connected {
-      return "Waiting for strap data"
-    }
-    if hasDiscoveredStraps {
-      return "Connect selected strap"
-    }
-    return searching ? "Searching..." : "Find my WHOOP"
-  }
-
-  private var primaryDisabled: Bool {
-    if connected && !canVerify {
-      return true
-    }
-    if searching && !hasDiscoveredStraps {
-      return true
-    }
-    return false
-  }
-
-  private func primaryAction() {
-    if canVerify {
-      onComplete()
-    } else if hasDiscoveredStraps {
-      ble.connectSelected()
-    } else {
-      startPairing()
-    }
-  }
-
-  private func startPairing() {
-    ble.requestBluetooth()
-    ble.startScan()
-  }
-}
-
-private struct OnboardingGroupedSection<Content: View>: View {
-  let content: Content
-
-  init(@ViewBuilder content: () -> Content) {
-    self.content = content()
-  }
-
-  var body: some View {
-    VStack(spacing: 0) {
-      content
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color(.secondarySystemGroupedBackground))
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .strokeBorder(Color(.separator).opacity(0.35))
-    }
-  }
-}
-
-private struct OnboardingImperialHeightRow: View {
-  @Binding var feet: String
-  @Binding var inches: String
-  let focusedField: FocusState<OnboardingInputField?>.Binding
-
-  var body: some View {
-    VStack(spacing: 0) {
-      OnboardingTextFieldRow(
-        label: "Height",
-        text: $feet,
-        prompt: "ft",
-        keyboardType: .numberPad,
-        suffix: "ft",
-        field: .heightFeet,
-        focusedField: focusedField
-      )
-      OnboardingDivider()
-      OnboardingTextFieldRow(
-        label: "Inches",
-        text: $inches,
-        prompt: "in",
-        keyboardType: .decimalPad,
-        suffix: "in",
-        field: .heightInches,
-        focusedField: focusedField
-      )
-    }
-  }
-}
-
-private struct OnboardingTextFieldRow: View {
-  let label: String
-  @Binding var text: String
-  let prompt: String
-  let keyboardType: UIKeyboardType
-  var textContentType: UITextContentType?
-  var suffix: String? = nil
-  let field: OnboardingInputField
-  let focusedField: FocusState<OnboardingInputField?>.Binding
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Text(label)
-        .foregroundStyle(.primary)
-      TextField(suffix == nil ? prompt : "0", text: $text)
-        .multilineTextAlignment(.trailing)
-        .keyboardType(keyboardType)
-        .textContentType(textContentType)
-        .focused(focusedField, equals: field)
-        .submitLabel(.done)
-        .onSubmit {
-          focusedField.wrappedValue = nil
-        }
-      if let suffix {
-        Text(suffix)
-          .foregroundStyle(.secondary)
-      }
-    }
-    .font(.body)
-    .padding(.horizontal, 16)
-    .frame(minHeight: 50)
-  }
-}
-
-private struct OnboardingDivider: View {
-  var body: some View {
-    Divider()
-      .padding(.leading, 16)
-  }
-}
-
-private struct OnboardingSectionLabel: View {
-  let text: String
-
-  init(_ text: String) {
-    self.text = text
-  }
-
-  var body: some View {
-    Text(text.uppercased())
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 4)
-  }
-}
-
-private struct OnboardingStateRow: View {
-  let systemImage: String
-  let label: String
-  let detail: String
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Image(systemName: systemImage)
-        .font(.title3)
-        .foregroundStyle(.blue)
-        .frame(width: 28)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(label)
-          .font(.headline)
-        Text(detail)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      }
-      Spacer()
-    }
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color(.secondarySystemGroupedBackground))
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-}
-
-private struct OnboardingDiscoveredStrapRow: View {
-  let device: GooseDiscoveredDevice
-  let selected: Bool
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 12) {
-        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-          .foregroundStyle(selected ? .blue : .secondary)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(device.name)
-            .font(.headline)
-            .foregroundStyle(.primary)
-          Text("RSSI \(device.rssi)")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
-        Spacer()
-      }
-      .padding(14)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color(.secondarySystemGroupedBackground))
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-private struct OnboardingKeyboardDismissTapCatcher: UIViewRepresentable {
-  let isEnabled: Bool
-  let dismiss: () -> Void
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(isEnabled: isEnabled, dismiss: dismiss)
-  }
-
-  func makeUIView(context: Context) -> UIView {
-    let view = UIView(frame: .zero)
-    view.isUserInteractionEnabled = false
-    return view
-  }
-
-  func updateUIView(_ uiView: UIView, context: Context) {
-    context.coordinator.isEnabled = isEnabled
-    context.coordinator.dismiss = dismiss
-    DispatchQueue.main.async {
-      context.coordinator.attach(to: uiView.window)
-    }
-  }
-
-  static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-    coordinator.detach()
-  }
-
-  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-    var isEnabled: Bool
-    var dismiss: () -> Void
-    private weak var window: UIWindow?
-    private weak var recognizer: UITapGestureRecognizer?
-
-    init(isEnabled: Bool, dismiss: @escaping () -> Void) {
-      self.isEnabled = isEnabled
-      self.dismiss = dismiss
-    }
-
-    func attach(to nextWindow: UIWindow?) {
-      guard let nextWindow else {
-        return
-      }
-      if window === nextWindow {
-        return
-      }
-      detach()
-      let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap))
-      tapRecognizer.cancelsTouchesInView = false
-      tapRecognizer.delegate = self
-      nextWindow.addGestureRecognizer(tapRecognizer)
-      window = nextWindow
-      recognizer = tapRecognizer
-    }
-
-    func detach() {
-      if let recognizer, let window {
-        window.removeGestureRecognizer(recognizer)
-      }
-      recognizer = nil
-      window = nil
-    }
-
-    @objc private func handleTap() {
-      guard isEnabled else {
-        return
-      }
-      dismiss()
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-      guard isEnabled, let view = touch.view else {
-        return false
-      }
-      return !view.hasSuperview(of: UIControl.self)
-    }
-  }
-}
-
-private extension UIView {
-  func hasSuperview<T: UIView>(of type: T.Type) -> Bool {
-    var candidate: UIView? = self
-    while let current = candidate {
-      if current is T {
-        return true
-      }
-      candidate = current.superview
-    }
-    return false
   }
 }

@@ -7,4 +7,12 @@ build/
 *.dSYM
 *.xcarchive
 Rust/include/*.tmp
+Rust/include/
+Rust/libgoose_core.a
 Rust/libgoose_core.a.tmp
+Rust/libcodex_ios_auth_bridge.a
+Rust/.goose_core.active-target
+Rust/iphoneos/
+Rust/iphonesimulator/
+Vendor/CodexRust/codex-rs/target/
+tmp/

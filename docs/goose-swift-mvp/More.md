@@ -72,8 +72,8 @@ MVP rule: More owns operational surfaces: device, connection lab, capture/import
 - [ ] Show Health adapter availability.
 - [ ] Show Health authorization state.
 - [ ] Show existing Goose records.
-- [ ] Show imported sleep history.
-- [ ] Add Apple Health dry run action.
+- [ ] Show platform sleep imports only as reference/quarantined evidence.
+- [ ] Add Apple Health dry run action only for outbound/profile-boundary audits.
 - [ ] Add Health Connect dry run action only if Android/shared build ever needs it.
 - [ ] Add refresh Health adapter action.
 - [ ] Show platform reports from `healthSyncReports`.

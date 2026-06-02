@@ -6,35 +6,35 @@ MVP rule: Coach should not pretend to be an LLM until the app has a real chat ba
 
 ## Parent View Contract
 
-- [ ] Create a dedicated `CoachView.swift` or split `CoachPlaceholderView` out of `AppShellView.swift`.
-- [ ] Keep this tab behind the Swift `Coach` tab item.
+- [x] Create a dedicated `CoachView.swift` or split `CoachPlaceholderView` out of `AppShellView.swift`.
+- [x] Keep this tab behind the Swift `Coach` tab item.
 - [ ] Define child routes: Today Recommendation, Journal, Sleep Coach, Recovery Insights, Strain Guidance, Stress Guidance, Data Gaps.
-- [ ] Define a `CoachSnapshot` value type with readiness, next actions, metric highlights, missing data, and provenance.
-- [ ] Separate generated coaching copy from deterministic/local rule copy.
-- [ ] Add explicit empty state when no trusted metrics are available.
+- [x] Define a `CoachSnapshot` value type with readiness, next actions, metric highlights, missing data, and provenance.
+- [x] Separate generated coaching copy from deterministic/local rule copy.
+- [x] Add explicit empty state when no trusted metrics are available.
 - [ ] Add previews for no-data, capture-needed, and populated days.
 
 ## Today Recommendation
 
-- [ ] Show daily readiness from `metricInputReadinessSummary()`.
-- [ ] Show input next action from `metricInputReadinessNextActionSummary()`.
-- [ ] Show score next action from `packetDerivedScoreNextActionSummary()`.
-- [ ] Show the primary focus: sleep, recovery, strain, stress, capture, calibration, or health sync.
-- [ ] Explain why using 2-4 cited local data points.
-- [ ] Link to the relevant Health child page.
-- [ ] Link to Capture when fresh device data is required.
-- [ ] Link to More > Health Sync when external health records are required.
+- [x] Show daily readiness from `metricInputReadinessSummary()`.
+- [x] Show input next action from `metricInputReadinessNextActionSummary()`.
+- [x] Show score next action from `packetDerivedScoreNextActionSummary()`.
+- [x] Show the primary focus: sleep, recovery, strain, stress, capture, calibration, or health sync.
+- [x] Explain why using 2-4 cited local data points.
+- [x] Link to the relevant Health child page.
+- [x] Link to Capture when fresh device data is required.
+- [x] Link to More > Health Sync when external health records are required.
 
 ## Metric Highlights
 
-- [ ] Add Sleep highlight from `todaySleepScoreSummary()`.
-- [ ] Add Recovery highlight from `todayRecoveryScoreSummary()`.
-- [ ] Add Strain highlight from `todayStrainScoreSummary()`.
-- [ ] Add Stress highlight from `todayStressScoreSummary()`.
-- [ ] Add HRV highlight from `todayHrvScoreSummary()` / `hrvFeatureSummary()`.
-- [ ] Add live HR highlight from `latestHeartRateSummary()` or BLE live HR.
-- [ ] Each highlight should show value, status, freshness, and provenance.
-- [ ] Hide or mark highlights whose data is sample/untrusted.
+- [x] Add Sleep highlight from `todaySleepScoreSummary()`.
+- [x] Add Recovery highlight from `todayRecoveryScoreSummary()`.
+- [x] Add Strain highlight from `todayStrainScoreSummary()`.
+- [x] Add Stress highlight from `todayStressScoreSummary()`.
+- [x] Add HRV highlight from `todayHrvScoreSummary()` / `hrvFeatureSummary()`.
+- [x] Add live HR highlight from `latestHeartRateSummary()` or BLE live HR.
+- [x] Each highlight should show value, status, freshness, and provenance.
+- [x] Hide or mark highlights whose data is sample/untrusted.
 
 ## Journal
 
@@ -54,7 +54,7 @@ MVP rule: Coach should not pretend to be an LLM until the app has a real chat ba
 - [ ] Show sleep schedule from `sleepV1ScheduleSummary()`.
 - [ ] Show sleep debt from `sleepV1DebtSummary()`.
 - [ ] Link to Health > Sleep.
-- [ ] Link to More > Health Sync when imported sleep history is needed.
+- [ ] Link to local sleep capture guidance when trusted band sleep history is needed.
 
 ## Recovery Insights
 
@@ -88,8 +88,8 @@ MVP rule: Coach should not pretend to be an LLM until the app has a real chat ba
 
 ## Data Gaps
 
-- [ ] Show packet input gaps from `packetDerivedFeatureNextActionSummary()`.
-- [ ] Show score gaps from `packetDerivedScoreNextActionSummary()`.
+- [x] Show packet input gaps from `packetDerivedFeatureNextActionSummary()`.
+- [x] Show score gaps from `packetDerivedScoreNextActionSummary()`.
 - [ ] Show unavailable health sync metrics from `unavailableHealthSyncMetricSummary()`.
 - [ ] Show capture requirement from capture/session summaries where applicable.
 - [ ] Provide one action per gap: Capture, Sync Health, Calibrate, Import Labels, Open Debug.
@@ -114,8 +114,8 @@ MVP rule: Coach should not pretend to be an LLM until the app has a real chat ba
 
 ## Parallel Agent Tasks
 
-- [ ] Agent Coach-A: Extract Coach tab and build `CoachSnapshot`.
-- [ ] Agent Coach-B: Implement Today Recommendation and Metric Highlights.
+- [x] Agent Coach-A: Extract Coach tab and build `CoachSnapshot`.
+- [x] Agent Coach-B: Implement Today Recommendation and Metric Highlights.
 - [ ] Agent Coach-C: Implement Journal entry UI and local persistence hooks.
 - [ ] Agent Coach-D: Implement Sleep Coach.
 - [ ] Agent Coach-E: Implement Recovery/Strain/Stress guidance cards.

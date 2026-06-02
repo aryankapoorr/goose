@@ -2,7 +2,8 @@ import SwiftUI
 
 struct RootView: View {
   @EnvironmentObject private var model: GooseAppModel
-  @AppStorage("goose.swift.onboardingComplete") private var onboardingComplete = false
+  @AppStorage(OnboardingStorage.onboardingComplete) private var onboardingComplete = false
+  @AppStorage(OnboardingStorage.onboardingRedoRequested) private var onboardingRedoRequested = false
 
   var body: some View {
     ZStack(alignment: .top) {
@@ -11,6 +12,7 @@ struct RootView: View {
           AppShellView()
         } else {
           OnboardingView {
+            onboardingRedoRequested = false
             onboardingComplete = true
             model.completeOnboarding()
           }
@@ -18,10 +20,36 @@ struct RootView: View {
       }
       SyncToastHost(ble: model.ble)
     }
-    .onAppear(perform: syncModelOnboardingState)
-    .onChange(of: onboardingComplete) { _, _ in
+    .gooseScreenBackground()
+    .onAppear {
+      mirrorCurrentOnboardingStateIfNeeded()
+      restorePersistedOnboardingStateIfNeeded()
       syncModelOnboardingState()
     }
+    .onChange(of: onboardingComplete) { _, _ in
+      mirrorCurrentOnboardingStateIfNeeded()
+      syncModelOnboardingState()
+    }
+  }
+
+  private func mirrorCurrentOnboardingStateIfNeeded() {
+    guard onboardingComplete else {
+      return
+    }
+    OnboardingProfilePersistence.saveProfileFromDefaults(onboardingComplete: true)
+  }
+
+  private func restorePersistedOnboardingStateIfNeeded() {
+    guard !onboardingComplete, !onboardingRedoRequested else {
+      return
+    }
+    guard
+      let state = OnboardingProfilePersistence.restoreIntoDefaultsIfAvailable(restoreCompletion: true),
+      state.onboardingComplete
+    else {
+      return
+    }
+    onboardingComplete = true
   }
 
   private func syncModelOnboardingState() {
@@ -46,7 +74,7 @@ private struct SyncToastHost: View {
           SyncStatusToastView(toast: toast)
         }
         .buttonStyle(.plain)
-        .disabled(toast.phase != .failed)
+        .allowsHitTesting(toast.phase == .failed)
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .transition(.asymmetric(
@@ -67,14 +95,11 @@ private struct SyncToastHost: View {
 
 private struct SyncStatusToastView: View {
   let toast: GooseSyncToast
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     HStack(spacing: 8) {
-      Image(systemName: systemImage)
-        .font(.system(size: 14, weight: .black))
-        .symbolEffect(.rotate, options: .repeating, value: toast.phase == .syncing)
-        .frame(width: 18, height: 18)
-        .foregroundStyle(tint)
+      SyncToastIcon(systemImage: systemImage, tint: tint, isSyncing: toast.phase == .syncing)
 
       Text(toast.title)
         .font(.system(size: 14, weight: .bold))
@@ -92,17 +117,13 @@ private struct SyncStatusToastView: View {
     .fixedSize(horizontal: true, vertical: false)
     .background {
       Capsule(style: .continuous)
-        .fill(.ultraThinMaterial)
-        .overlay {
-          Capsule(style: .continuous)
-            .fill(tint.opacity(0.11))
-        }
+        .fill(toastFill)
     }
     .overlay {
       Capsule(style: .continuous)
-        .strokeBorder(tint.opacity(0.72), lineWidth: 1.4)
+        .strokeBorder(tint, lineWidth: 1.5)
     }
-    .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 7)
+    .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 7)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(accessibilityText)
   }
@@ -123,11 +144,68 @@ private struct SyncStatusToastView: View {
     }
   }
 
+  private var toastFill: Color {
+    if colorScheme == .dark {
+      switch toast.phase {
+      case .syncing:
+        Color(red: 0.07, green: 0.16, blue: 0.25)
+      case .synced:
+        Color(red: 0.07, green: 0.20, blue: 0.12)
+      case .failed:
+        Color(red: 0.26, green: 0.10, blue: 0.09)
+      }
+    } else {
+      switch toast.phase {
+      case .syncing:
+        Color(red: 0.84, green: 0.91, blue: 1.0)
+      case .synced:
+        Color(red: 0.86, green: 0.96, blue: 0.88)
+      case .failed:
+        Color(red: 1.0, green: 0.88, blue: 0.86)
+      }
+    }
+  }
+
   private var accessibilityText: String {
     guard !toast.detail.isEmpty else {
       return toast.title
     }
     return "\(toast.title), \(toast.detail)"
+  }
+}
+
+private struct SyncToastIcon: View {
+  let systemImage: String
+  let tint: Color
+  let isSyncing: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    if isSyncing && !reduceMotion {
+      TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+        symbol(rotationDegrees: rotationDegrees(for: context.date))
+      }
+    } else {
+      symbol(rotationDegrees: 0)
+    }
+  }
+
+  private func symbol(rotationDegrees: Double) -> some View {
+    Image(systemName: systemImage)
+      .font(.system(size: 14, weight: .black))
+      .frame(width: 18, height: 18)
+      .foregroundStyle(tint)
+      .rotationEffect(.degrees(isSyncing ? rotationDegrees : 0))
+      .transaction { transaction in
+        transaction.disablesAnimations = true
+        transaction.animation = nil
+      }
+  }
+
+  private func rotationDegrees(for date: Date) -> Double {
+    let duration = 0.95
+    let progress = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: duration) / duration
+    return progress * 360
   }
 }
 
@@ -156,7 +234,7 @@ private struct SyncFailureSheet: View {
         }
         .padding(20)
       }
-      .background(Color(.systemGroupedBackground))
+      .gooseScreenBackground()
       .navigationTitle("Sync Error")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DeviceView: View {
   @EnvironmentObject private var model: GooseAppModel
@@ -21,7 +22,7 @@ private struct DeviceContentView: View {
 
   var body: some View {
     ZStack {
-      deviceBackground.ignoresSafeArea()
+      deviceScreenBackground.ignoresSafeArea()
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           DeviceConnectionHeader(
@@ -36,7 +37,10 @@ private struct DeviceContentView: View {
             .padding(.bottom, 46)
 
           if selectedPanel == .status {
-            DeviceImageAndBattery(batteryPercent: ble.batteryLevelPercent)
+            DeviceImageAndBattery(
+              batteryPercent: ble.batteryLevelPercent,
+              isCharging: ble.batteryIsCharging == true
+            )
           } else {
             DeviceAdvancedPanel(model: model, ble: ble)
           }
@@ -48,19 +52,29 @@ private struct DeviceContentView: View {
     }
     .navigationTitle("Device")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .tint(devicePrimaryText)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button {
           ble.refreshBatteryLevel()
+          ble.refreshDeviceInformation()
         } label: {
           Image(systemName: "battery.75percent")
         }
-        .foregroundStyle(.white)
-        .accessibilityLabel("Refresh Battery")
+        .foregroundStyle(devicePrimaryText)
+        .accessibilityLabel("Refresh Device")
       }
     }
     .onAppear {
       ble.refreshBatteryLevel()
+      ble.refreshDeviceInformation()
+    }
+    .task {
+      while !Task.isCancelled {
+        ble.refreshBatteryLevel()
+        try? await Task.sleep(for: .seconds(60))
+      }
     }
   }
 
@@ -72,7 +86,7 @@ private struct DeviceContentView: View {
   private var connectionHeadline: String {
     let state = ble.connectionState.lowercased()
     if deviceConnected {
-      return "CONNECTED TO"
+      return "CONNECTED"
     }
     if state == "connecting" {
       return "CONNECTING"
@@ -123,9 +137,9 @@ private struct DeviceTabButton: View {
       VStack(alignment: .leading, spacing: 10) {
         Text(label)
           .font(deviceLabelFont)
-          .foregroundStyle(selected ? .white : mutedText)
+          .foregroundStyle(selected ? devicePrimaryText : mutedText)
         Rectangle()
-          .fill(.white)
+          .fill(devicePrimaryText)
           .frame(width: selected ? underlineWidth : 0, height: 3)
       }
       .frame(width: label == "ADVANCED" ? 96 : 72, alignment: .leading)
@@ -141,6 +155,7 @@ private struct DeviceTabButton: View {
 
 private struct DeviceImageAndBattery: View {
   let batteryPercent: Int?
+  let isCharging: Bool
 
   var body: some View {
     GeometryReader { proxy in
@@ -158,15 +173,15 @@ private struct DeviceImageAndBattery: View {
           HStack(alignment: .bottom, spacing: 0) {
             Text(batteryText)
               .font(.system(size: percentFontSize, weight: .black, design: .default))
-              .foregroundStyle(.white)
+              .foregroundStyle(devicePrimaryText)
               .lineLimit(1)
               .minimumScaleFactor(0.7)
             Text("%")
               .font(.system(size: percentFontSize * 0.42, weight: .black, design: .default))
-              .foregroundStyle(.white)
+              .foregroundStyle(devicePrimaryText)
               .padding(.bottom, percentFontSize * 0.08)
           }
-          BatteryRail(percent: batteryPercent)
+          BatteryRail(percent: batteryPercent, isCharging: isCharging)
         }
         .frame(maxWidth: proxy.size.width, alignment: .trailing)
         .padding(.top, 190)
@@ -199,7 +214,7 @@ private struct DeviceConnectionHeader: View {
           .lineLimit(1)
         Text(deviceName.uppercased())
           .font(.system(size: 26, weight: .black, design: .default))
-          .foregroundStyle(.white)
+          .foregroundStyle(devicePrimaryText)
           .lineLimit(2)
           .minimumScaleFactor(0.78)
       }
@@ -212,7 +227,7 @@ private struct DeviceConnectionHeader: View {
         HStack(spacing: 8) {
           Text(lastSync)
             .font(deviceBodyFont.weight(.black))
-            .foregroundStyle(.white)
+            .foregroundStyle(devicePrimaryText)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
           Image(systemName: "icloud")
@@ -226,21 +241,54 @@ private struct DeviceConnectionHeader: View {
 
 private struct BatteryRail: View {
   let percent: Int?
+  let isCharging: Bool
+  @State private var chargingPulse = false
 
   var body: some View {
     ZStack(alignment: .bottom) {
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color(red: 0.23, green: 0.25, blue: 0.27))
+        .fill(deviceRailBackground)
         .frame(width: 10, height: 138)
       RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(batteryYellow)
+        .fill(fillStyle)
         .frame(width: 10, height: 138 * CGFloat(value))
+        .opacity(isCharging ? (chargingPulse ? 1 : 0.62) : 1)
+        .shadow(color: isCharging ? batteryYellow.opacity(chargingPulse ? 0.7 : 0.18) : .clear, radius: chargingPulse ? 10 : 2)
+      if isCharging {
+        Image(systemName: "bolt.fill")
+          .font(.system(size: 15, weight: .black))
+          .foregroundStyle(batteryYellow)
+          .shadow(color: batteryYellow.opacity(0.55), radius: chargingPulse ? 8 : 2)
+          .scaleEffect(chargingPulse ? 1.12 : 0.92)
+          .offset(y: -150)
+          .accessibilityHidden(true)
+      }
     }
     .frame(width: 12, height: 138)
+    .onAppear {
+      chargingPulse = isCharging
+    }
+    .onChange(of: isCharging) { _, charging in
+      chargingPulse = charging
+    }
+    .animation(
+      isCharging ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+      value: chargingPulse
+    )
   }
 
   private var value: Double {
     Double(min(max(percent ?? 0, 0), 100)) / 100
+  }
+
+  private var fillStyle: LinearGradient {
+    LinearGradient(
+      colors: isCharging
+        ? [batteryYellow, Color(red: 0.74, green: 1.0, blue: 0.56), batteryYellow]
+        : [batteryYellow, batteryYellow],
+      startPoint: .bottom,
+      endPoint: .top
+    )
   }
 }
 
@@ -253,7 +301,9 @@ private struct DeviceAdvancedPanel: View {
       DeviceDetailStack {
         DeviceFactRow(systemName: "gearshape", label: "Firmware", value: firmwareSummary)
         DeviceFactRow(systemName: "battery.25percent", label: "Battery", value: batterySummary)
+        DeviceFactRow(systemName: ble.batteryIsCharging == true ? "bolt.fill" : "powerplug", label: "Charging", value: ble.batteryChargeDisplayStatus)
         DeviceFactRow(systemName: "arrow.2.circlepath", label: "Last sync", value: relativeSummary(for: ble.lastSyncAt) ?? "Not synced")
+        DeviceFactRow(systemName: "clock.arrow.circlepath", label: "Strap clock", value: clockSummary)
       }
 
       DeviceFactRow(systemName: "iphone", label: "Model", value: modelSummary)
@@ -262,13 +312,19 @@ private struct DeviceAdvancedPanel: View {
         DeviceFactRow(systemName: "heart", label: "Live HR", value: heartRateSummary)
         DeviceFactRow(systemName: "dot.radiowaves.left.and.right", label: "Connection", value: ble.connectionState.capitalized)
         DeviceFactRow(systemName: "arrow.triangle.2.circlepath", label: "Historical sync", value: ble.historicalSyncStatus.capitalized)
+        DeviceFactRow(systemName: "bolt.horizontal", label: "High freq", value: ble.highFrequencyHistorySyncDisplaySummary)
+        DeviceFactRow(systemName: "lungs", label: "RR packets", value: model.respiratoryPacketWatchStatus)
         DeviceFactRow(systemName: "cpu", label: "Rust", value: model.rustStatus)
         DeviceFactRow(systemName: "waveform.path.ecg", label: "Last frame", value: model.lastParsedFrameSummary)
       }
 
-      DeviceActionGrid(ble: ble)
+      DeviceActionGrid(model: model, ble: ble)
       DiscoveredDeviceList(ble: ble)
       EventLogPreview(messages: Array(ble.messages.prefix(5)))
+    }
+    .onAppear(perform: refreshClockIfPossible)
+    .onChange(of: ble.connectionState) { _, _ in
+      refreshClockIfPossible()
     }
   }
 
@@ -280,12 +336,13 @@ private struct DeviceAdvancedPanel: View {
     guard let battery = ble.batteryLevelPercent else {
       return "Unknown"
     }
+    let status = ble.batteryPowerStatus == "Unknown" ? "" : " | \(ble.batteryPowerStatus)"
     if let updatedAt = ble.batteryUpdatedAt,
        Date().timeIntervalSince(updatedAt) > 3600,
        let relative = relativeSummary(for: updatedAt) {
-      return "\(battery)% [\(relative)]"
+      return "\(battery)%\(status) [\(relative)]"
     }
-    return "\(battery)%"
+    return "\(battery)%\(status)"
   }
 
   private var modelSummary: String {
@@ -307,6 +364,34 @@ private struct DeviceAdvancedPanel: View {
       return "\(bpm) bpm \(relative)"
     }
     return "\(bpm) bpm"
+  }
+
+  private var clockSummary: String {
+    guard let offset = ble.strapClockOffsetSeconds else {
+      return ble.strapClockStatus
+    }
+    let drift = formattedClockOffset(offset)
+    if let updatedAt = ble.strapClockUpdatedAt,
+       let relative = relativeSummary(for: updatedAt) {
+      return "\(drift) | \(ble.strapClockStatus) | \(relative)"
+    }
+    return "\(drift) | \(ble.strapClockStatus)"
+  }
+
+  private func refreshClockIfPossible() {
+    guard ble.canSyncClock else {
+      return
+    }
+    ble.readStrapClock(syncIfNeeded: true)
+  }
+
+  private func formattedClockOffset(_ offset: TimeInterval) -> String {
+    let rounded = Int(offset.rounded())
+    if rounded == 0 {
+      return "0s"
+    }
+    let sign = rounded > 0 ? "+" : "-"
+    return "\(sign)\(abs(rounded))s"
   }
 }
 
@@ -342,7 +427,7 @@ private struct DeviceFactRow: View {
       Spacer(minLength: 16)
       Text(value)
         .font(advancedBodyFont)
-        .foregroundStyle(.white)
+        .foregroundStyle(devicePrimaryText)
         .lineLimit(1)
         .minimumScaleFactor(0.72)
         .multilineTextAlignment(.trailing)
@@ -357,6 +442,7 @@ private struct DeviceFactRow: View {
 }
 
 private struct DeviceActionGrid: View {
+  @ObservedObject var model: GooseAppModel
   @ObservedObject var ble: GooseBLEClient
 
   private let columns = [
@@ -389,10 +475,33 @@ private struct DeviceActionGrid: View {
       }
       .disabled(!ble.canSyncHistorical)
 
+      DeviceActionButton(title: ble.highFrequencyHistorySyncActive ? "Exit HF" : "High Freq", systemName: "bolt.horizontal") {
+        if ble.highFrequencyHistorySyncActive {
+          ble.exitHighFrequencyHistorySync()
+        } else {
+          ble.enterHighFrequencyHistorySync()
+        }
+      }
+      .disabled(!ble.canWriteHighFrequencyHistorySync)
+
+      DeviceActionButton(title: model.respiratoryPacketWatchActive ? "Stop RR" : "Watch RR", systemName: "lungs") {
+        if model.respiratoryPacketWatchActive {
+          model.stopRespiratoryPacketWatch()
+        } else {
+          model.startRespiratoryPacketWatch()
+        }
+      }
+      .disabled(!model.respiratoryPacketWatchActive && ble.connectionState != "ready")
+
       DeviceActionButton(title: "Hello", systemName: "paperplane") {
         ble.sendClientHello()
       }
       .disabled(!ble.canSendHello)
+
+      DeviceActionButton(title: "Clock", systemName: "clock.arrow.circlepath") {
+        ble.readStrapClock(syncIfNeeded: true)
+      }
+      .disabled(!ble.canSyncClock)
 
       DeviceActionButton(title: "Forget", systemName: "trash", role: .destructive) {
         ble.forgetRememberedDevice()
@@ -420,7 +529,7 @@ private struct DeviceActionButton: View {
       }
       .frame(maxWidth: .infinity, minHeight: 46)
       .padding(.horizontal, 10)
-      .foregroundStyle(role == .destructive ? disconnectedRed : .white)
+      .foregroundStyle(role == .destructive ? disconnectedRed : devicePrimaryText)
       .background(controlBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
     .buttonStyle(.plain)
@@ -457,7 +566,7 @@ private struct DiscoveredDeviceList: View {
                 VStack(alignment: .leading, spacing: 4) {
                   Text(device.name)
                     .font(deviceBodyFont.weight(.black))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(devicePrimaryText)
                     .lineLimit(1)
                   Text(device.id.uuidString)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -511,7 +620,7 @@ private struct EventLogPreview: View {
 
               Text(message.title)
                 .font(.system(size: 15, weight: .black, design: .default))
-                .foregroundStyle(.white)
+                .foregroundStyle(devicePrimaryText)
                 .lineLimit(1)
 
               if !message.body.isEmpty {
@@ -547,11 +656,33 @@ private func relativeSummary(for date: Date?) -> String? {
   return formatter.localizedString(for: date, relativeTo: Date()).capitalized
 }
 
-private let deviceBackground = Color(red: 0.06, green: 0.09, blue: 0.11)
-private let controlBackground = Color(red: 0.12, green: 0.16, blue: 0.18)
-private let dividerColor = Color(red: 0.19, green: 0.22, blue: 0.25)
-private let secondaryText = Color(red: 0.63, green: 0.65, blue: 0.67)
-private let mutedText = Color(red: 0.56, green: 0.58, blue: 0.60)
+private let deviceScreenBackground = GooseTheme.appBackground
+private let devicePrimaryText = Color(uiColor: .label)
+private let controlBackground = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.12, green: 0.16, blue: 0.18, alpha: 1)
+    : .secondarySystemGroupedBackground
+})
+private let deviceRailBackground = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.23, green: 0.25, blue: 0.27, alpha: 1)
+    : .systemGray4
+})
+private let dividerColor = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.19, green: 0.22, blue: 0.25, alpha: 1)
+    : .separator
+})
+private let secondaryText = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.63, green: 0.65, blue: 0.67, alpha: 1)
+    : .secondaryLabel
+})
+private let mutedText = Color(uiColor: UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.56, green: 0.58, blue: 0.60, alpha: 1)
+    : .tertiaryLabel
+})
 private let connectedGreen = Color(red: 0.42, green: 0.84, blue: 0.30)
 private let disconnectedRed = Color(red: 1.0, green: 0.27, blue: 0.23)
 private let batteryYellow = Color(red: 1.0, green: 0.89, blue: 0.36)
