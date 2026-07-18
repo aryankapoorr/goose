@@ -51,10 +51,12 @@ Also fixed:
 
 ## Cardio Load
 
-- [ ] Validate the local Cardio Load formula against multiple real workout sessions.
-- [ ] Persist computed daily Cardio Load rows so charts do not recompute from raw sessions every render.
-- [ ] Confirm HR zone durations from band activity metrics; keep HR fallback only as marked local estimate.
-- [ ] Add migration/backfill for historical activity sessions once band import supports it.
+- [ ] Validate the local Cardio Load formula against multiple real workout sessions. Now unblocked — the formula runs on real device data instead of being unreachable; still needs validation against real workouts once available.
+- [ ] Persist computed daily Cardio Load rows so charts do not recompute from raw sessions every render. Still recomputes from raw sessions every call; unchanged by this pass.
+- [ ] Confirm HR zone durations from band activity metrics; keep HR fallback only as marked local estimate. The formula already prefers zone durations over the HRR-based HR fallback when available (`cardioLoadContribution`); still needs confirmation against real band data.
+- [ ] Add migration/backfill for historical activity sessions once band import supports it. Unchanged.
+
+Also fixed: `cardioLoadAlgorithmSummary()` was a stub that discarded its `range`/`calendar` arguments and unconditionally returned an empty/unavailable summary — every Cardio Load surface (`CardioLoadDetailSurface`, `cardioStatusRows()`, `cardioLoadSnapshot()`) was dead on arrival regardless of local data. Meanwhile a complete, real computation pipeline already existed unused in the same file: `cardioLoadActivitySessions`/`cardioLoadActivityMetricsByName` (real bridge session/metric reads), `cardioLoadContribution` (a real HRR-based or zone-duration-based per-session load formula), and `cardioLoadDailyComputations` (real acute/chronic load + training-status rollup) — plus matching helper functions (`cardioLoadVisibleDayCount`, `cardioLoadDayStarts`, `cardioLoadSessionIsUsable`, `cardioLoadTrainingStatus`, `cardioLoadTrendModel`) that were already written and also unused. `cardioLoadAlgorithmSummary()` now wires these together for real instead of stubbing them out.
 
 ## Algorithms, References, Calibration
 

@@ -16,16 +16,81 @@ extension HealthDataStore {
     range: String = "30D",
     calendar: Calendar = .current
   ) -> CardioLoadAlgorithmSummary {
-    _ = range
-    _ = calendar
-    return emptyCardioLoadSummary(
-      status: previewMissingData ? "No data" : "Needs activity",
-      freshness: previewMissingData ? "Missing" : "No local data",
-      source: .unavailable(
-        previewMissingData
-          ? "preview missing cardio load data"
-          : "cardio load needs local Goose activity sessions and daily activity metrics"
+    guard !previewMissingData else {
+      return emptyCardioLoadSummary(
+        status: "No data",
+        freshness: "Missing",
+        source: .unavailable("preview missing cardio load data")
       )
+    }
+
+    let visibleDayCount = Self.cardioLoadVisibleDayCount(for: range)
+    let lookbackDayCount = max(visibleDayCount, 35)
+    let today = calendar.startOfDay(for: Date())
+    let dayStarts = Self.cardioLoadDayStarts(count: lookbackDayCount, endingAt: today, calendar: calendar)
+    guard let earliestStart = dayStarts.first,
+          let rangeEnd = calendar.date(byAdding: .day, value: 1, to: today) else {
+      return emptyCardioLoadSummary(
+        status: "Needs activity",
+        freshness: "No local data",
+        source: .unavailable("cardio load needs local Goose activity sessions and daily activity metrics")
+      )
+    }
+
+    let sessions = cardioLoadActivitySessions(from: earliestStart, to: rangeEnd)
+      .filter(Self.cardioLoadSessionIsUsable)
+    guard !sessions.isEmpty else {
+      return emptyCardioLoadSummary(
+        status: "Needs activity",
+        freshness: "No local data",
+        source: .unavailable("cardio load needs local Goose activity sessions and daily activity metrics")
+      )
+    }
+
+    let contributions = sessions.compactMap { session -> CardioLoadSessionContribution? in
+      let sessionID = session["session_id"] as? String
+      let metrics = cardioLoadActivityMetricsByName(sessionID: sessionID)
+      return cardioLoadContribution(
+        from: session,
+        metrics: metrics,
+        observedMaxHeartRate: nil,
+        calendar: calendar
+      )
+    }
+    guard !contributions.isEmpty else {
+      return emptyCardioLoadSummary(
+        status: "Needs activity",
+        freshness: "No local data",
+        source: .unavailable("cardio load needs sessions with duration or heart-rate zone data")
+      )
+    }
+
+    let daily = cardioLoadDailyComputations(contributions: contributions, dayStarts: dayStarts)
+    let visible = Array(daily.suffix(visibleDayCount))
+    let maxLoad = max(visible.map(\.load).max() ?? 0, 1)
+    let activityDayCount = visible.filter { $0.load > 0 }.count
+    let hasBaseline = activityDayCount >= 7
+
+    let points = visible.map { day in
+      CardioLoadDay(
+        id: "\(Int64(day.dayStart.timeIntervalSince1970))",
+        dateLabel: Self.dateLabel(day.dayStart),
+        load: day.load,
+        status: day.status,
+        durationText: Self.minutesText(day.durationMinutes),
+        percent: Self.clamp(day.load / maxLoad, min: 0, max: 1),
+        source: .bridgeDeviceSensor("activity.list_sessions")
+      )
+    }
+
+    return CardioLoadAlgorithmSummary(
+      points: points,
+      status: points.last?.status ?? "Calibrating",
+      freshness: "Today",
+      source: .bridgeDeviceSensor("activity.list_sessions | goose.cardio_load.local_v1"),
+      sessionCount: contributions.count,
+      activityDayCount: activityDayCount,
+      hasBaseline: hasBaseline
     )
   }
 
