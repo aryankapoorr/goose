@@ -11,6 +11,24 @@ extension HealthDataStore {
     primarySleepDetail = detail
   }
 
+  func primarySleepWindow(for date: Date, calendar: Calendar = .current) -> (start: Date, end: Date)? {
+    guard let report = packetScoreReports["sleep"],
+          Self.map(report, "score_result", "output") != nil else {
+      return nil
+    }
+    let window = Self.map(report, "sleep_window")
+    let input = Self.map(report, "sleep_v1_input") ?? Self.map(report, "sleep_input")
+    guard let start = Self.bridgeDate(input?["start_time"] ?? window?["start_time"]),
+          let end = Self.bridgeDate(input?["end_time"] ?? window?["end_time"]),
+          end > start else {
+      return nil
+    }
+    guard calendar.isDate(start, inSameDayAs: date) || calendar.isDate(end, inSameDayAs: date) else {
+      return nil
+    }
+    return (start, end)
+  }
+
   static func primarySleepDetail(fromSleepReport report: [String: Any]?) -> PrimarySleepDetail? {
     guard let report,
           let output = map(report, "score_result", "output") else {

@@ -28,12 +28,21 @@ extension HealthDataStore {
 
     let dayStart = calendar.startOfDay(for: date)
     let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+    let activityIntervals = cardioLoadActivitySessions(from: dayStart, to: dayEnd).compactMap { session -> (start: Date, end: Date)? in
+      guard let startMs = Self.int64Value(session["start_time_unix_ms"]),
+            let endMs = Self.int64Value(session["end_time_unix_ms"]),
+            endMs > startMs else {
+        return nil
+      }
+      return (Date(timeIntervalSince1970: Double(startMs) / 1000), Date(timeIntervalSince1970: Double(endMs) / 1000))
+    }
     let restingHeartRate = stressRestingHeartRateEstimate(
       samples: samples,
       date: date,
       calendar: calendar,
       allowLiveFallbacks: allowLiveFallbacks
     )
+    let sleepWindow = primarySleepWindow(for: date, calendar: calendar)
     let bucketSeconds: TimeInterval = 10 * 60
     let grouped = Dictionary(grouping: samples) { sample in
       Int(max(sample.capturedAt.timeIntervalSince(dayStart), 0) / bucketSeconds)
@@ -61,9 +70,11 @@ extension HealthDataStore {
         )
         let start = dayStart.addingTimeInterval(TimeInterval(bucket) * bucketSeconds)
         let end = min(start.addingTimeInterval(bucketSeconds), dayEnd)
-        let sleepWindow = Self.isLikelySleepWindow(start, calendar: calendar)
+        let isSleepWindow = sleepWindow.map { start < $0.end && end > $0.start }
+          ?? Self.isLikelySleepWindow(start, calendar: calendar)
+        let activityWindow = activityIntervals.contains { start < $0.end && end > $0.start }
         var stress = (heartRatePressure * 0.88 + volatilityPressure * 0.12) * 100.0
-        if sleepWindow {
+        if isSleepWindow {
           stress *= 0.62
         }
         if averageHeartRate <= restingHeartRate + 4 {
@@ -79,7 +90,8 @@ extension HealthDataStore {
           stress: stress,
           averageHeartRate: averageHeartRate,
           sampleCount: bucketSamples.count,
-          isSleepWindow: sleepWindow
+          isSleepWindow: isSleepWindow,
+          isActivityWindow: activityWindow
         )
       }
 
@@ -140,8 +152,14 @@ extension HealthDataStore {
       )
     }
 
-    let recoverySeed = recoveryScoreValue()
-    var energy = Self.clamp(recoverySeed ?? 55, min: 5, max: 100)
+    guard let recoverySeed = recoveryScoreValue() else {
+      return emptyEnergyBankSummary(
+        status: "No recovery score",
+        freshness: stress.freshness,
+        source: .unavailable("energy bank requires a recovery score to seed today's charge")
+      )
+    }
+    var energy = Self.clamp(recoverySeed, min: 5, max: 100)
     var points: [EnergyStressPoint] = []
     var totalCharged = 0.0
     var totalDrained = 0.0
@@ -183,8 +201,8 @@ extension HealthDataStore {
     }
 
     let stressConfidence = stress.confidence ?? 0.35
-    let energyConfidence = Self.clamp(stressConfidence * 0.86 + (recoverySeed == nil ? 0 : 0.10), min: 0.30, max: 0.90)
-    let seedText = recoverySeed.flatMap { Self.numberText($0, fractionDigits: 0) }.map { "recovery_score=\($0)" } ?? "recovery_score=default_55"
+    let energyConfidence = Self.clamp(stressConfidence * 0.86 + 0.10, min: 0.30, max: 0.90)
+    let seedText = Self.numberText(recoverySeed, fractionDigits: 0).map { "recovery_score=\($0)" } ?? "recovery_score=unavailable"
     let inputSummary = [
       "stress_windows=\(stress.windows.count)",
       "stress_confidence=\(Self.numberText(stressConfidence, fractionDigits: 2) ?? "0")",

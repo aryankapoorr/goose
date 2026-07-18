@@ -261,11 +261,11 @@ extension HealthDataStore {
           trend: Self.stressTrendModel(base: snapshot.trend, summary: summary)
         )
       case "non-activity-stress-trend":
-        let wakingWindows = summary.windows.filter { !$0.isSleepWindow }
-        guard !wakingWindows.isEmpty else {
+        let nonActivityWindows = summary.windows.filter { !$0.isSleepWindow && !$0.isActivityWindow }
+        guard !nonActivityWindows.isEmpty else {
           return nil
         }
-        let average = wakingWindows.reduce(0.0) { $0 + $1.stress } / Double(wakingWindows.count)
+        let average = nonActivityWindows.reduce(0.0) { $0 + $1.stress } / Double(nonActivityWindows.count)
         guard let text = Self.numberText(average, fractionDigits: 0) else {
           return nil
         }
@@ -275,9 +275,9 @@ extension HealthDataStore {
           unit: "%",
           status: Self.stressTrendStatus(score: average),
           freshness: summary.freshness,
-          provenance: "\(summary.source.detail) | sleep windows excluded",
+          provenance: "\(summary.source.detail) | sleep and activity windows excluded",
           source: summary.source,
-          trend: Self.stressTrendModel(base: snapshot.trend, summary: summary, points: wakingWindows, title: snapshot.title)
+          trend: Self.stressTrendModel(base: snapshot.trend, summary: summary, points: nonActivityWindows, title: snapshot.title)
         )
       case "sleep-stress-trend":
         let sleepWindows = summary.windows.filter(\.isSleepWindow)

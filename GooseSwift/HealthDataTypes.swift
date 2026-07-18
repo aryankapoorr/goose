@@ -229,6 +229,7 @@ struct StressWindowPoint: Identifiable {
   let averageHeartRate: Double
   let sampleCount: Int
   let isSleepWindow: Bool
+  let isActivityWindow: Bool
 
   var durationMinutes: Double {
     max(end.timeIntervalSince(start) / 60.0, 0)

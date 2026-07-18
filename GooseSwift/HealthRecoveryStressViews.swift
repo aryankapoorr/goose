@@ -154,6 +154,7 @@ struct RecoveryV2OverviewPage: View {
       SleepV2BevelTrendSheet(snapshot: snapshot)
     }
     .onAppear {
+      store.refreshPacketInputsIfNeeded()
       store.refreshPacketScoresIfNeeded()
     }
   }
@@ -311,6 +312,10 @@ struct StressV2OverviewPage: View {
         }
         .accessibilityLabel("Choose Stress date")
       }
+    }
+    .onAppear {
+      store.refreshPacketInputsIfNeeded()
+      store.refreshPacketScoresIfNeeded()
     }
     .sheet(isPresented: $showingDatePicker) {
       StressV2DatePickerSheet(selectedDate: $selectedDate)

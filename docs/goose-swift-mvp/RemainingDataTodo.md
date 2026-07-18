@@ -38,11 +38,16 @@ Also fixed:
 
 ## Stress And Energy Bank
 
-- [ ] Persist daily stress windows instead of only computing the current day in memory.
-- [ ] Add activity masking to split activity stress from non-activity stress.
-- [ ] Use stored sleep windows for sleep stress instead of inferred clock windows.
-- [ ] Persist Energy Bank history and compute long-range trends.
-- [ ] Calibrate Energy Bank charge/drain rates against stored recovery, sleep, and activity history.
+- [ ] Persist daily stress windows instead of only computing the current day in memory. Raw HR already persists 7 days locally (`HeartRateSeriesStores.swift`); no Rust stress table exists yet. Still open.
+- [x] Add activity masking to split activity stress from non-activity stress. `StressWindowPoint` now carries `isActivityWindow`, computed by overlap-testing each 10-min bucket against `activity.list_sessions_with_metrics` for that day. The `"non-activity-stress-trend"` row was previously mislabeled — it only excluded sleep windows, not activity time — and now correctly excludes both.
+- [x] Use stored sleep windows for sleep stress instead of inferred clock windows. `stressAlgorithmSummary` now uses `store.primarySleepWindow(for:)` (the real bridge-derived sleep window) when available for that day, falling back to the `hour < 7 || hour >= 23` clock heuristic only when no scored sleep window exists.
+- [ ] Persist Energy Bank history and compute long-range trends. Entirely unbuilt — no daily rollup table, no read-back bridge method. Still open; needs new Rust work.
+- [ ] Calibrate Energy Bank charge/drain rates against stored recovery, sleep, and activity history. Blocked on the app's Calibration feature, which is itself unbuilt for any family. Still open; needs new Rust work.
+
+Also fixed:
+- `StressV2OverviewPage` had no `.onAppear` at all; it now refreshes packet inputs and scores like the other pages. Note this doesn't change the Stress page's own score (that's driven by the local HR cache, not packet scores) — it mainly keeps Energy Bank's recovery input and the coach's stress summary fresh.
+- `RecoveryV2OverviewPage`'s `.onAppear` was calling `refreshPacketScoresIfNeeded()` but not `refreshPacketInputsIfNeeded()`, so HRV/resting-HR trend rows (which come from `daily_recovery_metrics`/packet-input reports, not packet scores) could stay empty if Recovery was opened before any other packet-input-triggering screen. Now fixed alongside the Stress page.
+- Energy Bank silently seeded its whole day's charge/drain simulation from a hardcoded `55` whenever the recovery score was unavailable, and displayed it as a real percentage. It now returns an honest "No recovery score" empty state instead.
 
 ## Cardio Load
 
