@@ -284,20 +284,6 @@ struct StressTimelineChart: View {
   }
 }
 
-struct HeartRateZonesSection: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HealthSectionTitle("Heart Rate Zones")
-      BreakdownRow(label: "Zone 5", value: "0 min", tint: .red, width: 0)
-      BreakdownRow(label: "Zone 4", value: "0 min", tint: .orange, width: 0)
-      BreakdownRow(label: "Zone 3", value: "0 min", tint: .yellow, width: 0)
-      BreakdownRow(label: "Zone 2", value: "0 min", tint: .green, width: 0)
-    }
-    .padding(14)
-    .healthCardSurface()
-  }
-}
-
 struct BreakdownRow: View {
   let label: String
   let value: String

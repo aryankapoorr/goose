@@ -23,13 +23,18 @@ Also fixed: Sleep V2 now auto-runs the packet score bridge call on load (same fi
 
 ## Strain And Activity
 
-- [ ] Persist activity sessions with start/end, type, HR summary, zone durations, calories, and sync status.
-- [ ] Compute daily strain from activity sessions and HR load.
-- [ ] Add real step count extraction from motion/history packets.
-- [ ] Add calorie/energy estimator from profile, HR, movement, and activity sessions.
-- [ ] Build strain trends for score, exercise duration, daytime HR, total energy, and step count.
+- [x] Persist activity sessions with start/end, type, HR summary, zone durations, and sync status. Already fully built in Rust (`activity_sessions`/`activity_metrics` tables, `activity.*` bridge methods) and exercised by the live-workout recording flow. Calories are the one field still not attached to a session.
+- [ ] Compute daily strain from activity sessions and HR load. The strain score today is a continuous motion+HR estimate; it does not use the persisted session/zone data at all. Needs real Rust algorithm work to combine the two.
+- [x] Add real step count extraction from motion/history packets. Already real (`step_counter.rs`/`step_discovery.rs`/`step_motion_estimator.rs`); it just wasn't populating because Strain never called `refreshPacketInputsIfNeeded()`. Fixed below.
+- [x] Add calorie/energy estimator from profile, HR, movement, and activity sessions. Already real (`energy_rollup.rs`); same auto-run gap as steps, now fixed.
+- [ ] Build strain trends for score, exercise duration, daytime HR, total energy, and step count. Energy/step trend rows already work once inputs auto-run. `strain-score-trend` needs a new Rust "daily" field (same class as sleep/recovery). `daytime-hr-trend` needs a new daytime-HR rollup. `exercise-duration-trend` is Swift-only (aggregate `activity.list_sessions` per day) and still open.
 
-Also fixed: Strain V2 had no `.onAppear` at all (unlike Recovery/Sleep) and never auto-ran the packet score bridge call, so the strain score stayed empty until a manual Packet Inputs run. It now calls `store.refreshPacketScoresIfNeeded()` on load like the other two.
+Also fixed:
+- Strain V2 had no `.onAppear` at all (unlike Recovery/Sleep) and never auto-ran the packet score bridge call, so the strain score stayed empty until a manual Packet Inputs run. It now calls `store.refreshPacketInputsIfNeeded()` and `store.refreshPacketScoresIfNeeded()` on load, plus refreshes the activity timeline.
+- `strainDurationDisplayText()` was an unconditional `"--"` stub; it now sums real persisted session durations for the selected day.
+- The Activities section was a hardcoded "No activities" card; it now lists real sessions from `activity.list_sessions_with_metrics` when present.
+- The heart-rate-zones chart was 100% static (`"0 min"`, zero-width bars) and was also dead code in one place (rendered only from an unreachable branch for the `.strain` route); it now shows real per-zone minutes aggregated from persisted `hr_zone_N_duration` session metrics.
+- `strainTargetDisplayText()` was left as `"--"` intentionally — there is no target-strain concept anywhere in the app yet (no setting, no Rust field), so returning empty is the honest behavior, not a bug.
 
 ## Stress And Energy Bank
 

@@ -52,10 +52,6 @@ struct HealthMetricFamilyView: View {
           StressBreakdownRows(summary: store.stressAlgorithmSummary())
         }
 
-        if route == .strain {
-          HeartRateZonesSection()
-        }
-
         if route == .sleep {
           SleepTimelineSection(
             session: store.primarySleep(),
@@ -192,7 +188,7 @@ struct HealthMetricFamilyView: View {
           systemImage: "figure.run"
         ),
         HealthSummaryRow("Target strain", value: store.strainTargetDisplayText(), source: .unavailable("strain target unavailable"), systemImage: "target"),
-        HealthSummaryRow("Duration", value: store.strainDurationDisplayText(), source: .unavailable("activity sessions unavailable"), systemImage: "timer"),
+        HealthSummaryRow("Duration", value: store.strainDurationDisplayText(for: selectedDate), source: store.strainDurationSource(for: selectedDate), systemImage: "timer"),
         HealthSummaryRow("Total Energy", value: store.strainEnergyDisplayText(for: selectedDate), source: store.whoopTotalCaloriesSource(for: selectedDate), systemImage: "flame"),
         HealthSummaryRow("Steps", value: store.strainActivityCountText(for: selectedDate), source: store.whoopStepsSource(for: selectedDate), systemImage: "shoeprints.fill"),
       ]
@@ -445,7 +441,7 @@ struct StrainV2OverviewPage: View {
                 palette: palette,
                 systemImage: "timer",
                 label: "Duration",
-                value: store.strainDurationDisplayText()
+                value: store.strainDurationDisplayText(for: selectedDate)
               )
             }
             .frame(height: 96)
@@ -481,17 +477,26 @@ struct StrainV2OverviewPage: View {
               palette: palette,
               scoreText: store.strainScoreDisplayText(for: selectedDate),
               targetText: store.strainTargetDisplayText(),
-              durationText: store.strainDurationDisplayText(),
-              energyText: store.strainEnergyDisplayText(for: selectedDate)
+              durationText: store.strainDurationDisplayText(for: selectedDate),
+              energyText: store.strainEnergyDisplayText(for: selectedDate),
+              zoneMinutes: store.strainHeartRateZoneMinutes(for: selectedDate)
             )
 
             SleepV2SectionHeader(title: "Activities", palette: palette)
-            StrainV2EmptyStateCard(
-              palette: palette,
-              systemImage: "figure.run.circle",
-              title: "No activities",
-              message: store.strainEmptyStateSummary()
-            )
+            if todaysActivities.isEmpty {
+              StrainV2EmptyStateCard(
+                palette: palette,
+                systemImage: "figure.run.circle",
+                title: "No activities",
+                message: store.strainEmptyStateSummary()
+              )
+            } else {
+              VStack(spacing: 10) {
+                ForEach(todaysActivities) { item in
+                  StrainV2ActivityRow(palette: palette, item: item)
+                }
+              }
+            }
 
             SleepV2SectionHeader(title: "Trends", palette: palette)
             if trendRows.isEmpty {
@@ -535,7 +540,12 @@ struct StrainV2OverviewPage: View {
       }
     }
     .onAppear {
+      store.refreshPacketInputsIfNeeded()
       store.refreshPacketScoresIfNeeded()
+      model.refreshActivityTimeline(for: selectedDate)
+    }
+    .onChange(of: selectedDate) { _, newValue in
+      model.refreshActivityTimeline(for: newValue)
     }
     .sheet(isPresented: $showingDatePicker) {
       ScoreDatePickerSheet(
@@ -565,6 +575,12 @@ struct StrainV2OverviewPage: View {
 
   private var trendRows: [HealthMetricSnapshot] {
     store.trendRows(for: .strain)
+  }
+
+  private var todaysActivities: [ActivityTimelineItem] {
+    model.homeActivityTimelineItems.filter {
+      Calendar.current.isDate($0.startedAt, inSameDayAs: selectedDate)
+    }
   }
 
   private func openCoachTip() {
@@ -688,6 +704,7 @@ struct StrainV2DailyLoadCard: View {
   let targetText: String
   let durationText: String
   let energyText: String
+  let zoneMinutes: [Int: Double]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
@@ -718,7 +735,7 @@ struct StrainV2DailyLoadCard: View {
         StrainV2LoadTile(palette: palette, systemImage: "flame.fill", title: "Energy", value: energyText)
       }
 
-      StrainV2ZoneMeter(palette: palette)
+      StrainV2ZoneMeter(palette: palette, zoneMinutes: zoneMinutes)
     }
     .padding(20)
     .background(
@@ -768,6 +785,7 @@ struct StrainV2LoadTile: View {
 
 struct StrainV2ZoneMeter: View {
   let palette: SleepV2Palette
+  let zoneMinutes: [Int: Double]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -776,19 +794,20 @@ struct StrainV2ZoneMeter: View {
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(palette.text)
         Spacer()
-        Text("0 min")
+        Text(totalText)
           .font(.subheadline.weight(.semibold))
           .fontDesign(.rounded)
           .foregroundStyle(palette.secondaryText)
       }
 
-      HStack(spacing: 5) {
-        ForEach(0..<5, id: \.self) { _ in
+      HStack(alignment: .bottom, spacing: 5) {
+        ForEach(1...5, id: \.self) { zone in
           Capsule()
-            .fill(palette.separator.opacity(0.75))
-            .frame(height: 9)
+            .fill(maxZoneMinutes > 0 ? color(for: zone) : palette.separator.opacity(0.75))
+            .frame(height: barHeight(for: zone))
         }
       }
+      .frame(height: 28, alignment: .bottom)
 
       HStack {
         ForEach(["Z1", "Z2", "Z3", "Z4", "Z5"], id: \.self) { zone in
@@ -801,6 +820,44 @@ struct StrainV2ZoneMeter: View {
     }
     .padding(14)
     .background(palette.surfaceElevated.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+
+  private var totalMinutes: Double {
+    zoneMinutes.values.reduce(0, +)
+  }
+
+  private var maxZoneMinutes: Double {
+    zoneMinutes.values.max() ?? 0
+  }
+
+  private var totalText: String {
+    guard totalMinutes > 0 else {
+      return "0 min"
+    }
+    return "\(Int(totalMinutes.rounded())) min"
+  }
+
+  private func barHeight(for zone: Int) -> CGFloat {
+    guard maxZoneMinutes > 0 else {
+      return 9
+    }
+    let minutes = zoneMinutes[zone] ?? 0
+    return max(9, 28 * CGFloat(minutes / maxZoneMinutes))
+  }
+
+  private func color(for zone: Int) -> Color {
+    switch zone {
+    case 5:
+      return .red
+    case 4:
+      return Color(red: 1.0, green: 0.52, blue: 0.18)
+    case 3:
+      return .yellow
+    case 2:
+      return .green
+    default:
+      return .blue
+    }
   }
 }
 
@@ -832,6 +889,79 @@ struct StrainV2EmptyStateCard: View {
       .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
+}
+
+struct StrainV2ActivityRow: View {
+  let palette: SleepV2Palette
+  let item: ActivityTimelineItem
+
+  var body: some View {
+    SleepV2Panel(palette: palette, padding: 14, radius: 16) {
+      HStack(spacing: 12) {
+        Image(systemName: systemImage)
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(palette.accent)
+          .frame(width: 36, height: 36)
+          .background(palette.accent.opacity(0.12), in: Circle())
+
+        VStack(alignment: .leading, spacing: 3) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(item.title)
+              .font(.subheadline.weight(.bold))
+              .foregroundStyle(palette.text)
+              .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(Self.timeFormatter.string(from: item.startedAt))
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(palette.secondaryText)
+              .monospacedDigit()
+          }
+          Text(summaryText)
+            .font(.caption)
+            .foregroundStyle(palette.secondaryText)
+            .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private var summaryText: String {
+    var parts = [durationText]
+    if let averageHeartRate = item.averageHeartRate {
+      parts.append("avg \(averageHeartRate) bpm")
+    }
+    parts.append(item.syncStatus)
+    return parts.joined(separator: " | ")
+  }
+
+  private var durationText: String {
+    let totalSeconds = max(Int(item.durationSeconds.rounded()), 0)
+    let minutes = totalSeconds / 60
+    let hours = minutes / 60
+    return hours > 0 ? "\(hours)h \(minutes % 60)m" : "\(minutes)m"
+  }
+
+  private var systemImage: String {
+    switch item.activityType {
+    case "walking", "hiking":
+      "figure.walk"
+    case "running":
+      "figure.run"
+    case "cycling", "spinning":
+      "bicycle"
+    case "strength":
+      "dumbbell"
+    default:
+      "figure.mixed.cardio"
+    }
+  }
+
+  private static let timeFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm"
+    return formatter
+  }()
 }
 
 struct StrainV2InsightsSheet: View {

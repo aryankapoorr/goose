@@ -392,8 +392,33 @@ extension HealthDataStore {
     "--"
   }
 
-  func strainDurationDisplayText() -> String {
-    "--"
+  func strainDurationDisplayText(for date: Date = Date(), calendar: Calendar = .current) -> String {
+    let totalSeconds = activitySessionsDurationSeconds(for: date, calendar: calendar)
+    guard totalSeconds > 0 else {
+      return "--"
+    }
+    let totalMinutes = Int((totalSeconds / 60).rounded())
+    let hours = totalMinutes / 60
+    let minutes = totalMinutes % 60
+    return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+  }
+
+  func strainDurationSource(for date: Date = Date(), calendar: Calendar = .current) -> HealthDataSource {
+    activitySessionsDurationSeconds(for: date, calendar: calendar) > 0
+      ? .bridgeDeviceSensor("activity.list_sessions")
+      : .unavailable("no activity sessions stored for this day")
+  }
+
+  func activitySessionsDurationSeconds(for date: Date = Date(), calendar: Calendar = .current) -> Double {
+    let dayStart = calendar.startOfDay(for: date)
+    let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+    return cardioLoadActivitySessions(from: dayStart, to: dayEnd).reduce(0.0) { partial, session in
+      let startMs = Self.int64Value(session["start_time_unix_ms"])
+      let endMs = Self.int64Value(session["end_time_unix_ms"])
+      let fallbackSeconds = startMs.flatMap { start in endMs.map { end in Double(end - start) / 1000 } } ?? 0
+      let durationSeconds = Self.doubleValue(session["duration_ms"]).map { $0 / 1000 } ?? fallbackSeconds
+      return partial + max(durationSeconds, 0)
+    }
   }
 
   func strainEnergyDisplayText(for date: Date = Date(), calendar: Calendar = .current) -> String {

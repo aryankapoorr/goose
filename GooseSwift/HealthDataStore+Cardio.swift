@@ -134,6 +134,23 @@ extension HealthDataStore {
     }
   }
 
+  func strainHeartRateZoneMinutes(for date: Date = Date(), calendar: Calendar = .current) -> [Int: Double] {
+    let dayStart = calendar.startOfDay(for: date)
+    let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 60 * 60)
+    var totals: [Int: Double] = [:]
+    for session in cardioLoadActivitySessions(from: dayStart, to: dayEnd) {
+      guard let sessionID = session["session_id"] as? String else {
+        continue
+      }
+      let metrics = cardioLoadActivityMetricsByName(sessionID: sessionID)
+      for zone in 1...5 {
+        let seconds = Self.doubleValue(metrics["hr_zone_\(zone)_duration"]?["value"]) ?? 0
+        totals[zone, default: 0] += max(seconds, 0) / 60
+      }
+    }
+    return totals
+  }
+
   func cardioLoadContribution(
     from session: [String: Any],
     metrics: [String: [String: Any]],
