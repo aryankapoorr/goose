@@ -15,6 +15,7 @@ extension HealthDataStore {
           "resting_start": "0000",
           "resting_end": "9999",
           "resting_baseline_min_days": 3,
+          "persist_algorithm_run": true,
         ]) { _, new in new }
       )
       packetScoreReports["recovery"] = try bridge.request(
@@ -33,6 +34,7 @@ extension HealthDataStore {
           "resting_baseline_min_days": 3,
           "hrv_min_rr_intervals_to_compute": 2,
           "hrv_baseline_min_days": 3,
+          "persist_algorithm_run": true,
         ]) { _, new in new }
       )
       packetScoreStatus = "Bridge packet-derived scores recomputed"
@@ -52,10 +54,52 @@ extension HealthDataStore {
   }
 
   func runReferenceComparisons() {
-    referenceComparisonReports = [:]
     for family in ["hrv", "sleep", "strain", "stress"] {
-      referenceRunStatusByFamily[family] = "blocked | real comparison inputs not wired"
+      guard let input = referenceComparisonInput(for: family) else {
+        referenceComparisonReports[family] = nil
+        referenceRunStatusByFamily[family] = "blocked | run packet scores to capture \(family) inputs first"
+        continue
+      }
+      var args: [String: Any] = [
+        "family": family,
+        "input": input,
+      ]
+      if family == "sleep" {
+        args["goose_algorithm_id"] = "goose.sleep.v1"
+      }
+      do {
+        let report = try bridge.request(method: "metrics.reference_compare", args: args)
+        referenceComparisonReports[family] = report
+        referenceRunStatusByFamily[family] = Self.referenceComparisonStatusText(report)
+      } catch {
+        referenceComparisonReports[family] = nil
+        referenceRunStatusByFamily[family] = "blocked | \(Self.shortError(error))"
+      }
     }
+  }
+
+  private func referenceComparisonInput(for family: String) -> [String: Any]? {
+    switch family {
+    case "hrv":
+      return Self.map(packetScoreReports["recovery"], "hrv_report", "hrv_input")
+    case "sleep":
+      return Self.map(packetScoreReports["sleep"], "sleep_v1_input") ?? Self.map(packetScoreReports["sleep"], "sleep_input")
+    case "strain":
+      return Self.map(packetScoreReports["strain"], "strain_input")
+    case "stress":
+      return Self.map(packetScoreReports["stress"], "stress_input")
+    default:
+      return nil
+    }
+  }
+
+  private static func referenceComparisonStatusText(_ report: [String: Any]) -> String {
+    let comparableFields = array(report["comparable_fields"]).count
+    guard boolValue(report["pass"]) == true else {
+      let issues = array(report["issues"]).count
+      return "needs review | \(issues) issue\(issues == 1 ? "" : "s")"
+    }
+    return "pass | \(comparableFields) field\(comparableFields == 1 ? "" : "s") compared"
   }
 
   func importCalibrationLabels() {

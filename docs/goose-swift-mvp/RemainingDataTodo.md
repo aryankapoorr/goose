@@ -60,15 +60,19 @@ Also fixed: `cardioLoadAlgorithmSummary()` was a stub that discarded its `range`
 
 ## Algorithms, References, Calibration
 
-- [ ] Load algorithm and reference definitions only from the Rust bridge.
-- [ ] Wire reference comparisons to real captured input windows, not static benchmark payloads.
-- [ ] Define and persist real calibration labels.
-- [ ] Implement calibration runs with train/holdout splits from local metric history.
-- [ ] Show calibration outputs only after a completed local calibration run.
+- [x] Load algorithm and reference definitions only from the Rust bridge. Already done — `refreshBridgeCatalogs()` loads `metrics.built_in_definitions`/`metrics.reference_definitions`/`metrics.default_preferences` and is the only place these are ever assigned; no competing hardcoded list exists.
+- [x] Wire reference comparisons to real captured input windows, not static benchmark payloads. `runReferenceComparisons()` was a stub that never touched the bridge. The real Rust comparison engine (`metrics.reference_compare`) was fully built and completely unused; the real per-family inputs it needs were already sitting in `packetScoreReports` from existing score runs. Now wired for real, plus added the missing nav link (`.referenceComparisons` existed as a route but nothing linked to it).
+- [ ] Define and persist real calibration labels. Rust schema + bridge methods (`calibration.import_labels`, `calibration_labels` table) are fully built and unused, but there is no Swift UI to actually enter a label value today. Deferred — needs new screens, not just wiring.
+- [ ] Implement calibration runs with train/holdout splits from local metric history. `calibration.evaluate_stored_labels` + a real chronological-split, leakage-checked linear-model evaluator are fully built and unused in Rust. Blocked on labels (above) and on `algorithm_runs` actually having rows — see the `persist_algorithm_run` fix below, which is prep work for this but not the full feature.
+- [ ] Show calibration outputs only after a completed local calibration run. Falls out for free once the two items above are done. Currently gated on fake local booleans that render hardcoded numbers (`"1 label | manual"`, `"71.5 raw -> 74.2 / 100"`, etc.) — a real bug, but fixing it requires the labels UI above, so left as-is for now.
+
+Also fixed: `runPacketScores()` never passed `persist_algorithm_run: true` to any of the four score bridge calls, so the real `algorithm_runs` table (the "local metric history" calibration needs) has never had a single row written to it. All four (sleep/recovery/strain/stress) now opt in, so real history starts accumulating going forward — pure prep work for the calibration item above, not a full feature.
 
 ## Home, Coach, More
 
-- [ ] Make Home widgets share the same live/local/bridge/unavailable data contracts as Health.
-- [ ] Ensure Coach prompts explicitly receive current provenance and missing-data states.
-- [ ] Replace remaining placeholder routes with empty states or real screens.
-- [ ] Remove debug preview-only strings from runtime surfaces before TestFlight builds.
+- [x] Make Home widgets share the same live/local/bridge/unavailable data contracts as Health. Largely already true — Home builds its snapshots through the same `HealthDataStore` functions Health uses. Two minor, low-priority mismatches found and left as-is: `HomeDashboardView`'s strain-percent parsing duplicates `HealthDataStore.strainPercent(_:)` instead of calling it, and the Cardio Load sparkline draws a fabricated "confidence band" around its one real data point (cosmetic, no text claims a number).
+- [x] Ensure Coach prompts explicitly receive current provenance and missing-data states. Found a real gap: Coach's tool context and highlight/data-gap list only covered sleep/recovery/strain/stress — Cardio Load and Energy Bank (both real, computed metrics with their own Home widgets) were completely invisible to Coach. Added `cardio_load`/`energy_bank` to `CoachLocalToolContext.loadStats()`'s scores/provenance and to `CoachOverviewSnapshot`'s highlights/gaps, using the existing real summary functions.
+- [ ] Replace remaining placeholder routes with empty states or real screens. Checked all 13 `MoreRoute` cases — every one resolves to a real view, no dead routes or "Coming soon" strings anywhere. The only two non-functional rows (data export/deletion, support bundle composer) are already honestly disabled with truthful labels; making them work needs new Rust bridge methods, not a quick win. Nothing to fix here.
+- [x] Remove debug preview-only strings from runtime surfaces before TestFlight builds. Checked — the only debug-only UI is correctly wrapped in `#if DEBUG`, and the only unreachable dead code (`MoreDataStore+Validation.swift`'s preview factories and a hardcoded fake `healthSyncCandidate` function) is never called from anywhere, so there's no runtime leak. Nothing to fix.
+
+Also fixed: `HomeTimelineSection` hardcoded fixed clock times ("06:34", "17:00", "12:30") for its sleep/recovery/activity summary rows regardless of actual data or date — the same fabricated-value bug already fixed elsewhere (sleep's `?? 92`, energy bank's `?? 55`). These now show the real freshness label instead of a fake specific time.

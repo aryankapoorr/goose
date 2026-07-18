@@ -125,12 +125,14 @@ extension HealthDataStore {
         "target_midpoint_minutes_since_midnight": 180.0,
         "history_import_in_progress": false,
         "algorithm_id": "goose.sleep.v1",
+        "persist_algorithm_run": true,
       ]) { _, new in new }
     )
   }
 
   func recoveryScoreBridgeArgs() -> [String: Any] {
     [
+      "persist_algorithm_run": true,
       "hrv_start": "0000",
       "hrv_end": "9999",
       "hrv_baseline_start": "0000",

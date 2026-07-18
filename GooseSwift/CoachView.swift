@@ -147,6 +147,8 @@ private struct CoachOverviewSnapshot {
       healthStore.snapshot(for: .recovery),
       healthStore.snapshot(for: .strain),
       healthStore.snapshot(for: .stress),
+      healthStore.snapshot(for: .cardioLoad),
+      healthStore.snapshot(for: .energyBank),
     ]
 
     let recommendation = CoachRecommendation(

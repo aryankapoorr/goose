@@ -36,12 +36,16 @@ enum CoachLocalToolContext {
         "recovery": healthStore.recoveryFeatureScoreSummary(),
         "strain": healthStore.strainFeatureScoreSummary(),
         "stress": healthStore.stressFeatureScoreSummary(),
+        "cardio_load": healthStore.cardioLoadFeatureScoreSummary(),
+        "energy_bank": healthStore.energyBankFeatureScoreSummary(),
       ],
       "score_provenance": [
         "sleep": healthStore.packetScoreProvenanceSummary("sleep"),
         "recovery": healthStore.packetScoreProvenanceSummary("recovery"),
         "strain": healthStore.packetScoreProvenanceSummary("strain"),
         "stress": healthStore.packetScoreProvenanceSummary("stress"),
+        "cardio_load": healthStore.cardioLoadProvenanceSummary(),
+        "energy_bank": healthStore.energyBankProvenanceSummary(),
       ],
       "vitals": vitals(healthStore: healthStore, appModel: appModel),
       "status": [

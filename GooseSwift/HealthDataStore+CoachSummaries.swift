@@ -739,6 +739,34 @@ extension HealthDataStore {
     return "local estimate | \(scoreText) stress | \(summary.sampleCount) HR samples | confidence \(confidence)"
   }
 
+  func cardioLoadFeatureScoreSummary() -> String {
+    let summary = cardioLoadAlgorithmSummary()
+    guard let latest = summary.latestPoint,
+          let loadText = Self.numberText(latest.load, fractionDigits: 0) else {
+      return summary.status
+    }
+    return "\(summary.hasBaseline ? latest.status : "Calibrating") | \(loadText) load"
+  }
+
+  func cardioLoadProvenanceSummary() -> String {
+    let summary = cardioLoadAlgorithmSummary()
+    return "family=cardio_load | \(summary.source.detail) | sessions=\(summary.sessionCount)"
+  }
+
+  func energyBankFeatureScoreSummary() -> String {
+    let summary = energyBankAlgorithmSummary()
+    guard let percent = summary.percent,
+          let percentText = Self.numberText(percent, fractionDigits: 0) else {
+      return summary.status
+    }
+    return "\(summary.status) | \(percentText)% energy"
+  }
+
+  func energyBankProvenanceSummary() -> String {
+    let summary = energyBankAlgorithmSummary()
+    return "family=energy_bank | \(summary.source.detail)"
+  }
+
   func packetScoreProvenanceSummary(_ family: String) -> String {
     guard let report = packetScoreReports[family] else {
       return packetScoreStatus == "No run" ? "" : "family=\(family) | source=packet-derived bridge run"

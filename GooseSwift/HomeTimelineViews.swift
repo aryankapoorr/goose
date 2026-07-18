@@ -34,7 +34,7 @@ struct HomeTimelineSection: View {
       HomeTimelineEntry(
         id: "sleep",
         sortMinutes: 6 * 60 + 34,
-        time: "06:34",
+        time: sleep.freshness,
         title: "Sleep summary",
         subtitle: summary(for: sleep),
         systemImage: "moon.fill",
@@ -44,7 +44,7 @@ struct HomeTimelineSection: View {
       HomeTimelineEntry(
         id: "recovery",
         sortMinutes: 17 * 60,
-        time: "17:00",
+        time: recovery.freshness,
         title: "Recovery update",
         subtitle: summary(for: recovery),
         systemImage: "battery.25",
@@ -58,7 +58,7 @@ struct HomeTimelineSection: View {
         HomeTimelineEntry(
           id: "activity-load",
           sortMinutes: 12 * 60 + 30,
-          time: "12:30",
+          time: activity.freshness,
           title: "Activity load",
           subtitle: summary(for: activity),
           systemImage: "arrow.triangle.2.circlepath",

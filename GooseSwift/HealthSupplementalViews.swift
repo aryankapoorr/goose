@@ -101,7 +101,7 @@ struct ReferenceComparisonsView: View {
         }
       }
       Section("Policy") {
-        HealthInfoRow(row: HealthSummaryRow("Pass/fail policy", value: "Reference comparisons need real captured inputs before they can run", source: .unavailable("reference comparison inputs not wired"), systemImage: "checkmark.seal"))
+        HealthInfoRow(row: HealthSummaryRow("Pass/fail policy", value: "Runs against real captured inputs from the latest packet score for each family", source: .bridge("metrics.reference_compare"), systemImage: "checkmark.seal"))
       }
       Section("Comparisons") {
         ForEach(["hrv", "sleep", "strain", "stress"], id: \.self) { family in
