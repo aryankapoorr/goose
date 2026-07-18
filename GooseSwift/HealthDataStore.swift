@@ -118,6 +118,13 @@ final class HealthDataStore: ObservableObject {
     runPacketInputs()
   }
 
+  func refreshPacketScoresIfNeeded() {
+    guard packetScoreReports.isEmpty, packetScoreStatus == "No run" else {
+      return
+    }
+    runPacketScores()
+  }
+
   func refreshHeartRateTimeline(for date: Date = Date()) {
     let refreshID = UUID()
     heartRateTimelineRefreshID = refreshID

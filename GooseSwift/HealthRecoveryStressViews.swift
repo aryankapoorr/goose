@@ -153,6 +153,9 @@ struct RecoveryV2OverviewPage: View {
     .sheet(item: $selectedTrend) { snapshot in
       SleepV2BevelTrendSheet(snapshot: snapshot)
     }
+    .onAppear {
+      store.refreshPacketScoresIfNeeded()
+    }
   }
 
   private var selectedSnapshot: HealthMetricSnapshot {
