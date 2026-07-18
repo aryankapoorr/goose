@@ -390,6 +390,69 @@ extension HealthDataStore {
     return []
   }
 
+  func sleepInsightTopDriver() -> SleepInsightDriver? {
+    guard let output = Self.map(packetScoreReports["sleep"], "score_result", "output") else {
+      return nil
+    }
+    let candidates: [(name: String, deficit: Double, cap: Double)] = Self.array(output["components"]).compactMap { component in
+      guard let name = component["name"] as? String,
+            let weight = Self.doubleValue(component["weight"]), weight > 0,
+            let contribution = Self.doubleValue(component["contribution"]) else {
+        return nil
+      }
+      let cap = weight * 100
+      return (name, cap - contribution, cap)
+    }
+    guard let worst = candidates.max(by: { $0.deficit < $1.deficit }), worst.cap > 0, worst.deficit > 0.5 else {
+      return nil
+    }
+    let percentLost = (worst.deficit / worst.cap) * 100
+    guard let valueText = Self.numberText(percentLost, fractionDigits: 0) else {
+      return nil
+    }
+    return SleepInsightDriver(
+      title: Self.sleepComponentDisplayTitle(worst.name),
+      valueText: "-\(valueText)%",
+      strength: min(max(worst.deficit / worst.cap, 0), 1)
+    )
+  }
+
+  func sleepInsightConfidenceSummary() -> SleepInsightConfidence? {
+    guard let output = Self.map(packetScoreReports["sleep"], "score_result", "output"),
+          let confidence = Self.doubleValue(output["confidence_0_to_1"]) else {
+      return nil
+    }
+    let label: String
+    let detail: String
+    switch confidence {
+    case 0.75...:
+      label = "High confidence"
+      detail = "Score inputs are well covered by trusted packet data."
+    case 0.5..<0.75:
+      label = "Moderate confidence"
+      detail = "Some score inputs are still estimated. Log more nights to firm this up."
+    default:
+      label = "Low confidence"
+      detail = "Log more nights and tags to improve the confidence score."
+    }
+    return SleepInsightConfidence(label: label, detail: detail)
+  }
+
+  private static func sleepComponentDisplayTitle(_ name: String) -> String {
+    switch name {
+    case "duration":
+      "Sleep duration below target"
+    case "efficiency":
+      "Sleep efficiency below target"
+    case "consistency":
+      "Sleep schedule inconsistent"
+    case "disturbances":
+      "Frequent sleep disturbances"
+    default:
+      name.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+  }
+
   func recoveryFeatureScoreSummary() -> String {
     guard let report = packetScoreReports["recovery"] else {
       return packetScoreStatus == "No run" ? "No run" : packetScoreStatus

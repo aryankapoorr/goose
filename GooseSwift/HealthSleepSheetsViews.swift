@@ -6,7 +6,7 @@ import UIKit
 struct SleepV2SleepNeededSheet: View {
   let palette: SleepV2Palette
   @Environment(\.dismiss) private var dismiss
-  @State private var targetSleepMinutes = 7 * 60 + 30
+  @AppStorage(OnboardingStorage.targetSleepMinutes) private var targetSleepMinutes = 7 * 60 + 30
 
 	  var body: some View {
 	    NavigationStack {
@@ -227,7 +227,7 @@ struct SleepV2AlarmSheet: View {
   @State private var alarmTime = Self.defaultWakeTime()
   @State private var alarmType = "Regular"
   @State private var haptic = "Progressive"
-  @State private var targetSleepMinutes = 7 * 60 + 30
+  @AppStorage(OnboardingStorage.targetSleepMinutes) private var targetSleepMinutes = 7 * 60 + 30
   @State private var showWheelPicker = false
   @State private var showingHapticOptions = false
   @State private var showingDiagnostics = false

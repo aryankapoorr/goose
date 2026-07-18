@@ -120,6 +120,17 @@ struct HealthSummaryRow: Identifiable {
   }
 }
 
+struct SleepInsightDriver {
+  let title: String
+  let valueText: String
+  let strength: Double
+}
+
+struct SleepInsightConfidence {
+  let label: String
+  let detail: String
+}
+
 struct HealthSleepStageSegment: Identifiable {
   let id: String
   let stage: String

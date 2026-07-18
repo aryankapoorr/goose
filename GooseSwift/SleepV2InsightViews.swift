@@ -163,12 +163,13 @@ struct SleepV2ActionRow: View {
 
 struct SleepV2InsightsSheet: View {
   let palette: SleepV2Palette
+  @ObservedObject var store: HealthDataStore
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       ScrollView {
-        SleepV2InsightsSection(palette: palette)
+        SleepV2InsightsSection(palette: palette, store: store)
           .padding(18)
       }
       .background(palette.background.ignoresSafeArea())
@@ -188,6 +189,15 @@ struct SleepV2InsightsSheet: View {
 
 struct SleepV2InsightsSection: View {
   let palette: SleepV2Palette
+  @ObservedObject var store: HealthDataStore
+
+  private var driver: SleepInsightDriver? {
+    store.sleepInsightTopDriver()
+  }
+
+  private var confidence: SleepInsightConfidence? {
+    store.sleepInsightConfidenceSummary()
+  }
 
   var body: some View {
     SleepV2Panel(palette: palette, padding: 16, radius: 16) {
@@ -208,29 +218,40 @@ struct SleepV2InsightsSection: View {
           }
         }
 
-        HStack {
-          SleepV2ImpactPill(text: "Negative", color: Color(red: 0.88, green: 0.25, blue: 0.22))
-          SleepV2ImpactPill(text: "Positive", color: palette.accent)
+        if let driver {
+          HStack {
+            SleepV2ImpactPill(text: "Negative", color: Color(red: 0.88, green: 0.25, blue: 0.22))
+            SleepV2ImpactPill(text: "Positive", color: palette.accent)
+          }
+
+          SleepV2ImpactRow(
+            palette: palette,
+            systemImage: "exclamationmark.triangle.fill",
+            iconColor: Color(red: 0.92, green: 0.58, blue: 0.16),
+            title: driver.title,
+            value: driver.valueText,
+            strength: driver.strength
+          )
+        } else {
+          RecoveryV2EmptyStateCard(
+            palette: palette,
+            systemImage: "sparkles",
+            title: "No sleep insights",
+            value: "Run a sleep score to see score drivers"
+          )
         }
 
-        SleepV2ImpactRow(
-          palette: palette,
-          systemImage: "exclamationmark.triangle.fill",
-          iconColor: Color(red: 0.92, green: 0.58, blue: 0.16),
-          title: "Target strain overreached",
-          value: "-4%",
-          strength: 0.72
-        )
+        if let confidence {
+          Divider().background(palette.separator)
 
-        Divider().background(palette.separator)
-
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Low confidence")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(palette.text)
-          Text("Log more nights and tags to improve the confidence score.")
-            .font(.footnote)
-            .foregroundStyle(palette.secondaryText)
+          VStack(alignment: .leading, spacing: 5) {
+            Text(confidence.label)
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(palette.text)
+            Text(confidence.detail)
+              .font(.footnote)
+              .foregroundStyle(palette.secondaryText)
+          }
         }
       }
     }

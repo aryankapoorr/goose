@@ -5,12 +5,14 @@ Runtime rule: do not show fabricated metric values. A surface may show live, loc
 ## Sleep
 
 - [ ] Import primary sleep directly from band packets and persist nightly sleep records locally.
-- [ ] Populate sleep stage timeline from band-derived sleep stage output.
-- [ ] Build sleep trend history for score, time asleep, REM, deep, HR dip, sleep time, wake time, and latency.
-- [ ] Add real target sleep amount input and persist it.
-- [ ] Compute Sleep Needed from target sleep, sleep debt, recent sleep history, and planned wake time.
-- [ ] Compute Sleep Bank from target sleep amount and stored nightly sleep history.
-- [ ] Derive sleep insights from actual sleep score components and confidence fields.
+- [ ] Populate sleep stage timeline from band-derived sleep stage output. Likely already correct once the score auto-runs (see below); re-check before assuming more work is needed.
+- [ ] Build sleep trend history for score, time asleep, REM, deep, HR dip, sleep time, wake time, and latency. No `sleepTrendRowsForV2()` exists yet, and (like recovery) no bridge method returns a daily score series, so this needs a new Rust rollup.
+- [x] Add real target sleep amount input and persist it. `OnboardingStorage.targetSleepMinutes` now backs both `SleepV2SleepNeededSheet` and `SleepV2AlarmSheet` via `@AppStorage`, so they stay in sync and persist across launches.
+- [ ] Compute Sleep Needed from target sleep, sleep debt, recent sleep history, and planned wake time. Sleep debt fields already exist in the Rust sleep score output; still needs real wiring plus a planned-wake-time model.
+- [ ] Compute Sleep Bank from target sleep amount and stored nightly sleep history. Blocked on persisted nightly sleep history above.
+- [x] Derive sleep insights from actual sleep score components and confidence fields. `sleepInsightTopDriver()`/`sleepInsightConfidenceSummary()` now surface the real weighted score component with the largest deficit and the real `confidence_0_to_1` value instead of hardcoded text.
+
+Also fixed: Sleep V2 now auto-runs the packet score bridge call on load (same fix as Recovery), and removed a hardcoded `92` fallback score that violated the no-fabricated-data rule above.
 
 ## Recovery
 

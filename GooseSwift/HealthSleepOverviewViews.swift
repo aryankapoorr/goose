@@ -141,6 +141,7 @@ struct SleepV2OverviewPage: View {
     }
     .onAppear {
       store.loadBridgeCatalogsIfNeeded()
+      store.refreshPacketScoresIfNeeded()
       startBandSleepSyncIfReady()
     }
     .onChange(of: ble.canSyncHistorical) { _, _ in
@@ -168,7 +169,7 @@ struct SleepV2OverviewPage: View {
 	      SleepV2SleepNeededSheet(palette: palette)
 	    }
 	    .sheet(isPresented: $showingInsightsSheet) {
-	      SleepV2InsightsSheet(palette: palette)
+	      SleepV2InsightsSheet(palette: palette, store: store)
 	    }
 		    .sheet(item: $selectedTrend) { snapshot in
 		      SleepV2BevelTrendSheet(snapshot: snapshot)
@@ -192,7 +193,7 @@ struct SleepV2OverviewPage: View {
   private var sleepScore: Int {
     SleepV2Numbers.firstInt(in: selectedSnapshot.value)
       ?? SleepV2Numbers.firstInt(in: primarySleep?.scoreText ?? "")
-      ?? 92
+      ?? 0
   }
 
   private var dateLabel: String {

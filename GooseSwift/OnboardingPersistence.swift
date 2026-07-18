@@ -16,6 +16,7 @@ enum OnboardingStorage {
   static let weightGrams = "goose.swift.profile.weightGrams"
   static let createdAtUnixMs = "goose.swift.profile.createdAtUnixMs"
   static let timezoneID = "goose.swift.profile.timezoneID"
+  static let targetSleepMinutes = "goose.swift.profile.targetSleepMinutes"
   static let healthKitPermissionHandled = "goose.swift.permissions.healthKitHandled"
   static let locationPermissionHandled = "goose.swift.permissions.locationHandled"
   static let notificationPermissionHandled = "goose.swift.permissions.notificationHandled"
