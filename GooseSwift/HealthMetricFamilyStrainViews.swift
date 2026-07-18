@@ -534,6 +534,9 @@ struct StrainV2OverviewPage: View {
         .accessibilityLabel("Choose Strain date")
       }
     }
+    .onAppear {
+      store.refreshPacketScoresIfNeeded()
+    }
     .sheet(isPresented: $showingDatePicker) {
       ScoreDatePickerSheet(
         title: "Strain",

@@ -29,6 +29,8 @@ Also fixed: Sleep V2 now auto-runs the packet score bridge call on load (same fi
 - [ ] Add calorie/energy estimator from profile, HR, movement, and activity sessions.
 - [ ] Build strain trends for score, exercise duration, daytime HR, total energy, and step count.
 
+Also fixed: Strain V2 had no `.onAppear` at all (unlike Recovery/Sleep) and never auto-ran the packet score bridge call, so the strain score stayed empty until a manual Packet Inputs run. It now calls `store.refreshPacketScoresIfNeeded()` on load like the other two.
+
 ## Stress And Energy Bank
 
 - [ ] Persist daily stress windows instead of only computing the current day in memory.
